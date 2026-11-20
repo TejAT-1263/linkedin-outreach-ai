@@ -12,6 +12,11 @@ export const EXT = path.join(ROOT, 'extension');
 export const mockHtml = (name) => readFileSync(path.join(here, 'mock', name), 'utf8');
 
 export async function launch({ pages = {} } = {}) {
+  // Branded Google Chrome (v137+) ignores --load-extension, so the extension would never start.
+  if (/Google Chrome(\.app| Beta| Dev| Canary)?|google-chrome/i.test(process.env.CHROME_PATH || '')) {
+    throw new Error('CHROME_PATH points to branded Google Chrome, which no longer loads unpacked extensions from the command line (Chrome 137+). ' +
+      'Unset CHROME_PATH and run `npx playwright install chromium` once — the e2e suites use Playwright\'s Chromium by default.');
+  }
   const ctx = await chromium.launchPersistentContext('', {
     executablePath: process.env.CHROME_PATH || undefined,
     channel: process.env.CHROME_PATH ? undefined : 'chromium',
@@ -38,7 +43,10 @@ export async function launch({ pages = {} } = {}) {
   });
 
   let [sw] = ctx.serviceWorkers();
-  if (!sw) sw = await ctx.waitForEvent('serviceworker');
+  if (!sw) {
+    sw = await ctx.waitForEvent('serviceworker', { timeout: 15000 }).catch(() => null);
+    if (!sw) throw new Error('The extension did not start in the test browser. Check extension/manifest.json loads in chrome://extensions, and that this Chromium allows --load-extension.');
+  }
   const extId = sw.url().split('/')[2];
   const errors = [];
   const coverage = [];

@@ -36,7 +36,8 @@ npm run test:dom    # 21 content-script tests in real Chrome
 npm run test:e2e    # 55 end-to-end steps in real Chrome + popup coverage gate (≥90%)
 npm run test:fuzz   # 5,000-case property fuzzing (FUZZ_SEED=… to reproduce)
 npm run package     # validates manifest → dist/linkedin-outreach-ai-v<version>.zip
-# Set CHROME_PATH=/path/to/chrome to use an installed Chrome instead of Playwright's.
+# First time only: npm run setup:browsers   (downloads Playwright's Chromium, ~100 MB)
+# Don't point CHROME_PATH at Google Chrome for e2e: Chrome 137+ refuses --load-extension.
 ```
 
 ```

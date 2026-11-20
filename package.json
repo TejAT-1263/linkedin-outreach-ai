@@ -15,7 +15,8 @@
     "package": "node scripts/package.mjs",
     "test:fuzz": "FUZZ_N=5000 node --test tests/unit/fuzz.test.mjs",
     "test:dom": "node --test \"tests/dom/*.test.mjs\"",
-    "test:all": "npm run lint && npm test && npm run test:dom && npm run test:e2e"
+    "test:all": "npm run lint && npm test && npm run test:dom && npm run test:e2e",
+    "setup:browsers": "playwright install chromium"
   },
   "devDependencies": {
     "@eslint/js": "^9.0.0",

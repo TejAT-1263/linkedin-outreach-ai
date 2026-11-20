@@ -142,8 +142,13 @@ await step('tracker: expand by click and Enter, copy, open profile, undo replied
   await pop.keyboard.press('Space');
   await pop.click(`${card} >> [aria-label="Copy message"]`);
   await pop.waitForFunction(() => /Copied/.test(document.querySelector('#toast').textContent));
+  // Verify from Chrome's side: a new tab really opened on the right profile. (Playwright's page
+  // handle for extension-created tabs can report an empty URL on macOS.)
+  const countTabs = () => env.sw.evaluate(async () => (await chrome.tabs.query({ url: 'https://www.linkedin.com/in/priya-sharma/*' })).length);
+  const before = await countTabs();
   const [newPage] = await Promise.all([env.ctx.waitForEvent('page'), pop.click(`${card} >> [aria-label^="Open "]`)]);
-  await newPage.waitForURL(/linkedin\.com\/in\/priya-sharma\/$/);
+  for (const t0 = Date.now(); (await countTabs()) <= before && Date.now() - t0 < 10000;) await new Promise(r => setTimeout(r, 100));
+  assert.equal(await countTabs(), before + 1, 'a new tab opened on the profile');
   await newPage.close();
   await pop.click(`${card} >> button:has-text("Replied")`); await pop.waitForTimeout(300);
   await pop.click(`${card} >> button:has-text("Undo")`); await pop.waitForTimeout(300);
