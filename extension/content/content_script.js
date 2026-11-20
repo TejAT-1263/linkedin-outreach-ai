@@ -12,7 +12,11 @@
   window.__outreachAiLoaded = true;
 
   const SELECTORS = {
+    // 2026 layout: the name is an <h2> in the top card; older layouts used <h1>.
     name: 'main h1, h1',
+    nameCandidates: 'main h1, main h2, h1, h2',
+    // 2026 layout scrolls inside <main id="workspace">, not the window.
+    scroller: '#workspace, main',
     topCard: 'main section:first-of-type, section',
     topCardLines: 'p, div.text-body-medium, span.text-body-small',
     section: 'section',
@@ -52,17 +56,78 @@
   });
 
   // ─── Scraping ───────────────────────────────────────────────────────────────
-  async function scrapeWithScroll() {
-    // Lower sections lazy-load; scroll to trigger them, then put the user back.
-    const startY = window.scrollY;
-    const maxY = Math.max((document.body?.scrollHeight || 0) - window.innerHeight, 0);
-    for (const y of [800, 1600, 2400].filter(y => y <= maxY + 800)) {
-      window.scrollTo(0, y);
-      await wait(450);
+
+  /** The element that actually scrolls the profile (LinkedIn moved this off the window in 2026). */
+  function findScroller() {
+    const scrollable = (el) => {
+      if (!el) return false;
+      const oy = getComputedStyle(el).overflowY;
+      return /(auto|scroll)/.test(oy) && el.scrollHeight > el.clientHeight + 50;
+    };
+    for (const el of document.querySelectorAll(SELECTORS.scroller)) {
+      if (scrollable(el)) return el;
+      for (let a = el.parentElement; a && a !== document.body; a = a.parentElement) if (scrollable(a)) return a;
     }
-    window.scrollTo(0, startY);
+    return document.scrollingElement || document.documentElement;
+  }
+
+  async function scrapeWithScroll() {
+    // Lower sections lazy-load as they come into view: scroll the real container in
+    // viewport-sized steps until nothing new loads, then put the user back where they were.
+    const sc = findScroller();
+    const startY = sc.scrollTop;
+    // Bounded: at most 12 viewport-sized steps (~3.6 s) — enough for a full profile.
+    const step = Math.max(400, sc.clientHeight || window.innerHeight);
+    for (let y = step, i = 0; y < sc.scrollHeight + step && i < 12; y += step, i++) {
+      sc.scrollTop = y;
+      await wait(300);
+    }
+    sc.scrollTop = startY;
     await wait(150);
     return scrapeProfile();
+  }
+
+  // Inline-only text blocks: paragraphs/spans whose content is text with line breaks,
+  // hashtags or links — how LinkedIn renders About text and posts in the 2026 layout.
+  // BUTTON is allowed because LinkedIn puts its "…more" toggle inside the text element;
+  // its label is stripped from the result.
+  const INLINE = new Set(['BR', 'STRONG', 'EM', 'B', 'I', 'A', 'SPAN', 'U', 'MARK', 'SMALL', 'WBR', 'BUTTON']);
+  function blockText(el) {
+    const copy = el.cloneNode(true);
+    copy.querySelectorAll('button').forEach(b => b.remove());
+    copy.querySelectorAll('br').forEach(b => b.replaceWith('\n'));
+    return undouble(clean(copy.textContent));
+  }
+  /** LinkedIn sometimes renders a visible and a screen-reader copy in one element: "AB AB" → "AB". */
+  function undouble(t) {
+    const mid = Math.floor(t.length / 2);
+    for (const k of [mid, mid + 1, mid - 1]) {
+      const a = t.slice(0, k).trim();
+      if (a.length > 10 && a === t.slice(k).trim()) return a;
+    }
+    return t;
+  }
+  function textBlocks(root, min = 40) {
+    if (!root) return [];
+    const blocks = Array.from(root.querySelectorAll('p, span'))
+      .filter(el => Array.from(el.querySelectorAll('*')).every(d => INLINE.has(d.tagName) || d.closest('button')))
+      .map(blockText)
+      .filter(t => t.length >= min);
+    // Drop blocks that are just a piece of a longer block.
+    return [...new Set(blocks)].filter((t, _, all) => !all.some(o => o !== t && o.length > t.length && o.includes(t)));
+  }
+
+  /** Name from the tab title, minus LinkedIn's "(3) " notification counter. */
+  function nameFromTitle() {
+    return clean(document.title.replace(/^\(\d+\+?\)\s*/, '').split('|')[0]);
+  }
+
+  function findNameHeading() {
+    const h1 = document.querySelector(SELECTORS.name);
+    if (h1 && clean(h1.innerText || h1.textContent)) return h1;
+    const want = nameFromTitle().toLowerCase();
+    const heads = Array.from(document.querySelectorAll(SELECTORS.nameCandidates));
+    return heads.find(h => want && clean(h.innerText || h.textContent).toLowerCase() === want) || null;
   }
 
   function leafTexts(root, selector = 'p, span') {
@@ -88,9 +153,9 @@
   }
 
   function scrapeProfile() {
-    const name = clean(document.querySelector(SELECTORS.name)?.innerText) || clean(document.title.split('|')[0]);
-    const h1 = document.querySelector(SELECTORS.name);
-    const topCard = h1 ? (h1.closest(SELECTORS.section) || h1.parentElement?.parentElement) : null;
+    const nameEl = findNameHeading();
+    const name = clean(nameEl?.innerText || nameEl?.textContent) || nameFromTitle();
+    const topCard = nameEl ? (nameEl.closest(SELECTORS.section) || nameEl.parentElement?.parentElement) : null;
 
     // Headline + location from the top card
     let headline = '';
@@ -107,7 +172,14 @@
       skills: findSection('skills'), activity: findSection('activity')
     };
 
-    const about = leafTexts(sections.about).find(t => t.length > 80) || '';
+    const aboutBlocks = textBlocks(sections.about, 80).filter(t => !/^top skills\b/i.test(t));
+    const about = aboutBlocks.sort((a, b) => b.length - a.length)[0] || leafTexts(sections.about).find(t => t.length > 80) || '';
+    // "Top skills" line inside About ("A • B • C") — often richer than the trimmed Skills section.
+    const topSkillsLabel = sections.about && Array.from(sections.about.querySelectorAll('p, span, div'))
+      .find(el => clean(el.innerText || el.textContent).toLowerCase() === 'top skills');
+    const topSkills = topSkillsLabel?.nextElementSibling
+      ? clean(topSkillsLabel.nextElementSibling.innerText || topSkillsLabel.nextElementSibling.textContent).split(/\s*[•·]\s*/).filter(t => t && t.length < 60)
+      : [];
 
     // Experience: title, company · type, dates, [location]
     const experienceEntries = [];
@@ -130,8 +202,8 @@
     const currentCompany = current?.company || fromHeadline(headline, 'company');
     const pastCompanies = [...new Set(experienceEntries.slice(1).map(e => e.company).filter(c => c && c !== currentCompany))];
 
-    const skills = [...new Set(leafTexts(sections.skills).filter(t =>
-      t !== 'Skills' && t.length < 60 && !/\d/.test(t) && !UI_NOISE_RE.test(t)))];
+    const skills = [...new Set([...topSkills, ...leafTexts(sections.skills).filter(t =>
+      !/^skills\b/i.test(t) && t.length < 60 && !/\d/.test(t) && !UI_NOISE_RE.test(t))])];
 
     const educationEntries = [];
     const eduLines = [...dedupeAdjacent(leafTexts(sections.education, SELECTORS.leafText))].filter(t => t !== 'Education');
@@ -139,7 +211,9 @@
       if (eduLines[i] && !DATE_RE.test(eduLines[i])) educationEntries.push({ school: eduLines[i], detail: eduLines[i + 1] || '' });
     }
 
-    const recentPosts = [...new Set(leafTexts(sections.activity).filter(t => t.length > 40 && t.length < 500 && !UI_NOISE_RE.test(t)))];
+    const postBlocks = textBlocks(sections.activity, 40);
+    const recentPosts = [...new Set((postBlocks.length ? postBlocks : leafTexts(sections.activity))
+      .filter(t => t.length > 40 && t.length < 3000 && !UI_NOISE_RE.test(t) && !/\bfollowers?\b/i.test(t)))];
 
     // Read check: which parts did we actually find?
     const found = {

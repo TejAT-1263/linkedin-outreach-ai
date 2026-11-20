@@ -160,6 +160,60 @@ test('very large pages are scraped quickly with bounded output', async () => {
   await page.close();
 });
 
+// ─── 2026 layout (measured on live LinkedIn, Nov 2026) ─────────────────────────
+// Name in <h2>, hashed class names, no section anchor ids, "(3)" notification count in the
+// tab title, the page scrolls inside <main id="workspace">, lower sections mount only when
+// scrolled into view, About/post text shares an element with a "…more" button, and link
+// cards render their title twice in one element.
+const LAYOUT_2026 = `
+<style>html,body{height:100%;margin:0;overflow:hidden} #workspace{height:700px;overflow-y:auto} section{min-height:500px}</style>
+<div id="app"><main id="workspace" class="bsjx1">
+<section class="bsj01"><h2 class="bsja">Priya Sharma</h2><p class="bsjb">Senior PM at Razorpay | ex-Flipkart</p>
+  <p class="bsjc">IIT Bombay</p><p class="bsjc">Bengaluru, Karnataka, India</p><a>Contact info</a><p>500+ connections</p></section>
+<section class="bsj02"><h2>About</h2><p class="bsjd"><span>I build payments products that small businesses actually enjoy using.<br><br>Previously led checkout at Flipkart for five years.</span><button><span>…more</span></button></p>
+  <div><p>Top skills</p><p>Product Management • Payments • SQL</p></div></section>
+<section class="bsj03"><h2>Activity</h2><p>2,310 followers</p>
+  <p><span>Why most onboarding flows fail: they ask for everything up front.<br><strong>#product</strong> <a>#onboarding</a></span><button>…more</button></p>
+  <p><span><span>Pricing teardown: what Stripe gets right about self-serve</span><span>Pricing teardown: what Stripe gets right about self-serve</span></span></p>
+  <div class="vjs-control-bar"><span class="vjs-control-text">Seek to live, currently behind live</span><p>Beginning of dialog window. Escape will cancel and close the window.</p></div></section>
+<div id="lazy"></div>
+</main></div>
+<script>
+  // Mount Experience/Education/Skills only when the inner container scrolls near them.
+  const ws = document.getElementById('workspace');
+  const exp = (r) => r.map(t => '<p>' + t + '</p>').join('');
+  const later = [
+    '<section><h2>Experience</h2>' + exp(['Senior Product Manager', 'Razorpay · Full-time', 'Jan 2022 - Present · 2 yrs 10 mos', 'Bengaluru, Karnataka, India · Hybrid', 'Product Manager', 'Flipkart · Full-time', '2017 - 2021 · 4 yrs']) + '<span>more</span></section>',
+    '<section><h2>Education</h2>' + exp(['IIT Bombay', 'B.Tech, Computer Science', '2013 – 2017']) + '</section>',
+    '<section><h2>Skills (24)</h2><span>Product Management</span><span>Go-to-market</span><span>Show all</span></section>'
+  ];
+  ws.addEventListener('scroll', () => {
+    while (later.length && ws.scrollTop + ws.clientHeight > ws.scrollHeight - 300) {
+      document.getElementById('lazy').insertAdjacentHTML('beforeend', later.shift());
+    }
+  });
+</script>`;
+
+test('2026 layout: h2 name, inner scroll container, lazy sections, "…more" buttons, doubled text', async () => {
+  const { page, scrape } = await load(LAYOUT_2026, { title: '(3) Priya Sharma | LinkedIn', url: 'https://www.linkedin.com/in/priya-sharma/' });
+  await page.evaluate(() => { document.getElementById('workspace').scrollTop = 120; });
+  const d = await scrape();
+  assert.equal(d.name, 'Priya Sharma', 'no "(3)" from the title');
+  assert.equal(d.headline, 'Senior PM at Razorpay | ex-Flipkart');
+  assert.equal(d.location, 'Bengaluru, Karnataka, India');
+  assert.equal(d.about, 'I build payments products that small businesses actually enjoy using. Previously led checkout at Flipkart for five years.');
+  assert.doesNotMatch(d.about, /more/);
+  assert.equal(d.currentTitle, 'Senior Product Manager');
+  assert.equal(d.currentCompany, 'Razorpay');
+  assert.deepEqual(d.pastCompanies, ['Flipkart']);
+  assert.deepEqual(d.educationEntries, [{ school: 'IIT Bombay', detail: 'B.Tech, Computer Science' }]);
+  assert.deepEqual(d.skills, ['Product Management', 'Payments', 'SQL', 'Go-to-market'], 'Top skills first, then Skills section, deduped');
+  assert.deepEqual(d.recentPosts, ['Why most onboarding flows fail: they ask for everything up front. #product #onboarding', 'Pricing teardown: what Stripe gets right about self-serve']);
+  assert.equal(d.diagnostics.foundCount, 8);
+  assert.equal(await page.evaluate(() => document.getElementById('workspace').scrollTop), 120, 'inner scroll position restored');
+  await page.close();
+});
+
 // ─── Messaging contract ───────────────────────────────────────────────────────
 test('ping, unknown actions, foreign senders, double injection', async () => {
   const { page, send } = await load('<p>x</p>');
