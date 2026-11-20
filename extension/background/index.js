@@ -12,22 +12,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   return true; // keep the channel open for the async response
 });
 
-chrome.runtime.onInstalled.addListener(async () => {
-  await ready;
+const safely = (label, fn) => async (...args) => {
+  try { await ready; await fn(...args); } catch (err) { console.error(`[outreach] ${label} failed`, err); }
+};
+
+const boot = safely('startup', async () => {
   await followups.ensureAlarm();
   await followups.refresh({ notify: false });
 });
+chrome.runtime.onInstalled.addListener(boot);
+chrome.runtime.onStartup.addListener(boot);
 
-chrome.runtime.onStartup.addListener(async () => {
-  await ready;
-  await followups.ensureAlarm();
-  await followups.refresh({ notify: false });
-});
+chrome.alarms.onAlarm.addListener(safely('alarm', async (alarm) => {
+  if (alarm.name === ALARM_FOLLOWUPS) await followups.refresh({ notify: true });
+}));
 
-chrome.alarms.onAlarm.addListener(async (alarm) => {
-  if (alarm.name !== ALARM_FOLLOWUPS) return;
-  await ready;
-  await followups.refresh({ notify: true });
-});
-
-chrome.notifications?.onClicked.addListener((id) => { followups.onNotificationClicked(id); });
+chrome.notifications?.onClicked.addListener(safely('notification', (id) => followups.onNotificationClicked(id)));

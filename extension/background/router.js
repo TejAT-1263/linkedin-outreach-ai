@@ -7,7 +7,7 @@ import { aiMessage, aiFollowUp, aiResumeFacts } from './writer-ai.js';
 import { templatize, applyTemplate, validateTemplate } from './templates.js';
 import { computeStats, isDue, followUpDueAt, toCsv } from './tracker.js';
 import { createClient, ApiError } from './anthropic.js';
-import { UserError } from './linkedin.js';
+import { UserError } from '../shared/errors.js';
 import * as linkedin from './linkedin.js';
 import * as store from './store.js';
 import * as followups from './followups.js';
@@ -315,7 +315,8 @@ export function isTrustedSender(sender) {
 
 export async function dispatch(message, sender) {
   if (!isTrustedSender(sender)) return { success: false, error: 'Untrusted sender.' };
-  const handler = handlers[message?.action];
+  if (!message || typeof message !== 'object' || typeof message.action !== 'string') return { success: false, error: 'Malformed request.' };
+  const handler = Object.hasOwn(handlers, message.action) ? handlers[message.action] : null;
   if (!handler) return { success: false, error: `Unknown action: ${String(message?.action)}` };
   try {
     const data = await handler(message.payload && typeof message.payload === 'object' ? message.payload : {});

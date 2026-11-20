@@ -55,7 +55,7 @@
   async function scrapeWithScroll() {
     // Lower sections lazy-load; scroll to trigger them, then put the user back.
     const startY = window.scrollY;
-    const maxY = Math.max(document.body.scrollHeight - window.innerHeight, 0);
+    const maxY = Math.max((document.body?.scrollHeight || 0) - window.innerHeight, 0);
     for (const y of [800, 1600, 2400].filter(y => y <= maxY + 800)) {
       window.scrollTo(0, y);
       await wait(450);

@@ -64,7 +64,7 @@ export function prune(contactsMap, max = LIMITS.MAX_CONTACTS) {
 
 export function toCsv(contacts) {
   const cols = ['name', 'headline', 'company', 'profileUrl', 'purpose', 'status', 'opener', 'followUps', 'created', 'sent', 'message'];
-  const iso = (t) => (t ? new Date(t).toISOString() : '');
+  const iso = (t) => (Number.isFinite(t) && t > 0 && t < 8.64e15 ? new Date(t).toISOString() : '');
   const rows = contacts.map(c => [
     c.name, c.headline, c.company, c.profileUrl, c.purpose, c.status,
     GROUP_LABEL[primaryGroup(c)], c.followUps || 0, iso(c.createdAt), iso(c.sentAt || c.insertedAt), c.message

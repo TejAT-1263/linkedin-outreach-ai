@@ -1,6 +1,6 @@
 // popup/main.js — boot, tabs, theme, shortcuts. Each tab lives in its own module.
 import { call, ACTIONS } from './api.js';
-import { $, show } from './dom.js';
+import { $, show, toast } from './dom.js';
 import * as write from './write.js';
 import * as tracker from './tracker.js';
 import * as settings from './settings.js';
@@ -21,6 +21,13 @@ const app = {
 };
 
 document.addEventListener('DOMContentLoaded', boot);
+
+// Safety net: an unexpected error should never leave the popup silently broken.
+window.addEventListener('error', () => toast('Something went wrong. Please try again.', 'error'));
+window.addEventListener('unhandledrejection', (e) => {
+  e.preventDefault();
+  toast(e.reason?.message || 'Something went wrong. Please try again.', 'error');
+});
 
 async function boot() {
   try {

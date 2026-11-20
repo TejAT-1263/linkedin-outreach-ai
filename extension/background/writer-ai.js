@@ -1,5 +1,6 @@
 // background/writer-ai.js — AI writing with the user's own key.
 import { truncate, hardFit, stripQuotes } from '../shared/text.js';
+import { UserError } from '../shared/errors.js';
 
 export const SYSTEM_PROMPT = `You write LinkedIn outreach that real people reply to.
 Rules:
@@ -79,7 +80,8 @@ export async function aiResumeFacts(client, apiKey, base64) {
   });
   const m = String(raw).match(/\{[\s\S]*\}/);
   let json;
-  try { json = JSON.parse(m ? m[0] : ''); } catch { throw new Error("Couldn't read the resume. Try typing your background instead."); }
+  try { json = JSON.parse(m ? m[0] : ''); } catch { json = null; }
+  if (!json || typeof json !== 'object' || Array.isArray(json)) throw new UserError("Couldn't read the resume. Try typing your background instead.", 'resume_unreadable');
   const arr = (x, n) => (Array.isArray(x) ? x.map(v => String(v).trim()).filter(Boolean).slice(0, n) : []);
   return {
     summary: String(json.summary || '').trim().slice(0, 160),

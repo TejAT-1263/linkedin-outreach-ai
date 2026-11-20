@@ -14,15 +14,25 @@ export async function refresh({ notify = false } = {}) {
   const now = Date.now();
   const due = contacts.filter(c => isDue(c, now, settings.followUpDays));
 
-  await chrome.action.setBadgeText({ text: due.length ? String(Math.min(due.length, 99)) : '' });
-  if (due.length) await chrome.action.setBadgeBackgroundColor({ color: '#1A56DB' });
-  await chrome.action.setTitle({ title: due.length ? `LinkedIn Outreach AI — ${due.length} follow-up${due.length > 1 ? 's' : ''} due` : 'LinkedIn Outreach AI' });
+  try {
+    await chrome.action.setBadgeText({ text: due.length ? String(Math.min(due.length, 99)) : '' });
+    if (due.length) await chrome.action.setBadgeBackgroundColor({ color: '#1A56DB' });
+    await chrome.action.setTitle({ title: due.length ? `LinkedIn Outreach AI — ${due.length} follow-up${due.length > 1 ? 's' : ''} due` : 'LinkedIn Outreach AI' });
+  } catch { /* badge is cosmetic; never fail the caller over it */ }
 
   if (!notify || !settings.notifications || !chrome.notifications) return due.length;
 
   const fresh = due.filter(c => !c.notifiedAt || c.notifiedAt < followUpDueAt(c, settings.followUpDays));
   if (!fresh.length) return due.length;
 
+  try {
+    notifyUser(fresh);
+  } catch { return due.length; /* notifications blocked by the OS/browser: badge still works */ }
+  for (const c of fresh) await store.mutateContact(c.id, prev => (prev ? { ...prev, notifiedAt: now } : null));
+  return due.length;
+}
+
+function notifyUser(fresh) {
   if (fresh.length === 1) {
     const c = fresh[0];
     chrome.notifications.create(`fu:${c.id}`, {
@@ -39,8 +49,6 @@ export async function refresh({ notify = false } = {}) {
       priority: 0
     });
   }
-  for (const c of fresh) await store.mutateContact(c.id, prev => (prev ? { ...prev, notifiedAt: now } : null));
-  return due.length;
 }
 
 export async function onNotificationClicked(id) {

@@ -3,11 +3,54 @@
 // operations (popup actions, alarms) can never overwrite each other.
 import { LIMITS, THEMES, PURPOSES, TONES, FORMATS, STATUS } from '../shared/constants.js';
 import { clean } from '../shared/text.js';
+import { UserError } from '../shared/errors.js';
 import { migrate, defaultSettings, defaultPrefs } from './migrate.js';
 import { prune } from './tracker.js';
 
 const local = () => chrome.storage.local;
 const session = () => chrome.storage.session;
+
+/** Writes fail loudly but helpfully (quota, disk, profile errors). */
+async function save(obj, area = local()) {
+  try {
+    await area.set(obj);
+  } catch (err) {
+    if (/quota/i.test(String(err?.message))) throw new UserError('Storage is full. Export your tracker (Settings → Your data) and clear old contacts.', 'quota');
+    throw new UserError('Could not save your changes. Please try again.', 'storage');
+  }
+}
+
+const isObj = (x) => x && typeof x === 'object' && !Array.isArray(x);
+const s = (x, max) => (typeof x === 'string' ? x.slice(0, max) : '');
+const n = (x) => (Number.isFinite(x) ? x : null);
+
+/** Repair a contact read from storage; returns null if it's beyond saving. */
+export function normalizeContact(raw, id) {
+  if (!isObj(raw)) return null;
+  const statuses = Object.values(STATUS);
+  return {
+    ...raw,
+    id,
+    name: s(raw.name, 120) || 'Unknown',
+    headline: s(raw.headline, 220),
+    company: s(raw.company, 120),
+    profileUrl: /^https:\/\/www\.linkedin\.com\/in\//.test(raw.profileUrl) ? raw.profileUrl : '',
+    purpose: PURPOSES.includes(raw.purpose) ? raw.purpose : 'Networking',
+    format: FORMATS[raw.format] ? raw.format : 'note',
+    message: s(raw.message, LIMITS.MAX_TEXT),
+    status: statuses.includes(raw.status) ? raw.status : STATUS.DRAFTED,
+    hooks: Array.isArray(raw.hooks) ? raw.hooks.filter(isObj).slice(0, 2) : [],
+    history: Array.isArray(raw.history) ? raw.history.filter(isObj).slice(-20) : [],
+    followUps: Number.isInteger(raw.followUps) && raw.followUps >= 0 ? raw.followUps : 0,
+    createdAt: n(raw.createdAt) ?? 0,
+    updatedAt: n(raw.updatedAt) ?? 0,
+    insertedAt: n(raw.insertedAt),
+    sentAt: n(raw.sentAt),
+    lastTouchAt: n(raw.lastTouchAt),
+    repliedAt: n(raw.repliedAt),
+    notifiedAt: n(raw.notifiedAt)
+  };
+}
 
 let queue = Promise.resolve();
 /** Run fn exclusively. Errors propagate to the caller but don't break the queue. */
@@ -30,16 +73,17 @@ export async function init() {
 // ─── Settings ─────────────────────────────────────────────────────────────────
 export async function getSettings() {
   const { settings } = await local().get('settings');
-  return { ...defaultSettings(), ...(settings || {}) };
+  return { ...defaultSettings(), ...sanitizeSettings(isObj(settings) ? settings : {}) };
 }
 
 export function sanitizeSettings(patch = {}) {
   const out = {};
-  if ('name' in patch) out.name = clean(patch.name).slice(0, 80);
-  if ('bio' in patch) out.bio = clean(patch.bio).slice(0, 160);
-  if ('background' in patch) out.background = String(patch.background ?? '').slice(0, 1000);
-  if ('apiKey' in patch) out.apiKey = String(patch.apiKey ?? '').trim().slice(0, 300);
-  if ('resumeFileName' in patch) out.resumeFileName = clean(patch.resumeFileName).slice(0, 120);
+  const text = (v) => (typeof v === 'string' ? v : typeof v === 'number' ? String(v) : '');
+  if ('name' in patch) out.name = clean(text(patch.name)).slice(0, 80);
+  if ('bio' in patch) out.bio = clean(text(patch.bio)).slice(0, 160);
+  if ('background' in patch) out.background = text(patch.background).slice(0, 1000);
+  if ('apiKey' in patch) out.apiKey = text(patch.apiKey).trim().slice(0, 300);
+  if ('resumeFileName' in patch) out.resumeFileName = clean(text(patch.resumeFileName)).slice(0, 120);
   if ('followUpDays' in patch) {
     const d = Math.round(Number(patch.followUpDays));
     out.followUpDays = Number.isFinite(d) ? Math.min(LIMITS.MAX_FOLLOWUP_DAYS, Math.max(LIMITS.MIN_FOLLOWUP_DAYS, d)) : LIMITS.DEFAULT_FOLLOWUP_DAYS;
@@ -52,7 +96,7 @@ export function sanitizeSettings(patch = {}) {
 export async function saveSettings(patch) {
   return withLock(async () => {
     const settings = { ...(await getSettings()), ...sanitizeSettings(patch) };
-    await local().set({ settings });
+    await save({ settings });
     return settings;
   });
 }
@@ -66,7 +110,13 @@ export function publicSettings(s) {
 // ─── Prefs ────────────────────────────────────────────────────────────────────
 export async function getPrefs() {
   const { prefs } = await local().get('prefs');
-  return { ...defaultPrefs(), ...(prefs || {}) };
+  const p = isObj(prefs) ? prefs : {};
+  const d = defaultPrefs();
+  return {
+    messageType: PURPOSES.includes(p.messageType) ? p.messageType : d.messageType,
+    tone: TONES.includes(p.tone) ? p.tone : d.tone,
+    format: FORMATS[p.format] ? p.format : d.format
+  };
 }
 
 export async function savePrefs(patch = {}) {
@@ -75,7 +125,7 @@ export async function savePrefs(patch = {}) {
     if (PURPOSES.includes(patch.messageType)) prefs.messageType = patch.messageType;
     if (TONES.includes(patch.tone)) prefs.tone = patch.tone;
     if (FORMATS[patch.format]) prefs.format = patch.format;
-    await local().set({ prefs });
+    await save({ prefs });
     return prefs;
   });
 }
@@ -83,7 +133,13 @@ export async function savePrefs(patch = {}) {
 // ─── Contacts ─────────────────────────────────────────────────────────────────
 async function readContacts() {
   const { contacts } = await local().get('contacts');
-  return contacts || {};
+  if (!isObj(contacts)) return {};
+  const out = {};
+  for (const [id, raw] of Object.entries(contacts)) {
+    const c = normalizeContact(raw, id);
+    if (c) out[id] = c;
+  }
+  return out;
 }
 
 export async function listContacts() {
@@ -101,19 +157,21 @@ export async function mutateContact(id, mutate) {
     const next = mutate(contacts[id] || null);
     if (next === null) delete contacts[id];
     else contacts[id] = { ...next, id, updatedAt: Date.now() };
-    await local().set({ contacts: prune(contacts) });
+    await save({ contacts: prune(contacts) });
     return next === null ? null : contacts[id] || null;
   });
 }
 
 export async function clearContacts() {
-  return withLock(() => local().set({ contacts: {} }));
+  return withLock(() => save({ contacts: {} }));
 }
 
 // ─── Templates ────────────────────────────────────────────────────────────────
 export async function listTemplates() {
   const { templates } = await local().get('templates');
-  return Array.isArray(templates) ? templates : [];
+  if (!Array.isArray(templates)) return [];
+  return templates.filter(t => isObj(t) && typeof t.id === 'string' && typeof t.name === 'string' && typeof t.text === 'string')
+    .map(t => ({ ...t, uses: Number.isInteger(t.uses) ? t.uses : 0, purpose: PURPOSES.includes(t.purpose) ? t.purpose : '' }));
 }
 
 export async function saveTemplate(tpl) {
@@ -122,10 +180,10 @@ export async function saveTemplate(tpl) {
     const existing = templates.findIndex(t => t.id === tpl.id || t.name.toLowerCase() === tpl.name.toLowerCase());
     if (existing >= 0) templates[existing] = { ...templates[existing], ...tpl, id: templates[existing].id, updatedAt: Date.now() };
     else {
-      if (templates.length >= LIMITS.MAX_TEMPLATES) throw new Error(`You can keep up to ${LIMITS.MAX_TEMPLATES} templates. Delete one first.`);
+      if (templates.length >= LIMITS.MAX_TEMPLATES) throw new UserError(`You can keep up to ${LIMITS.MAX_TEMPLATES} templates. Delete one first.`);
       templates.unshift({ ...tpl, id: `tpl_${Date.now().toString(36)}`, uses: 0, createdAt: Date.now(), updatedAt: Date.now() });
     }
-    await local().set({ templates });
+    await save({ templates });
     return templates;
   });
 }
@@ -133,7 +191,7 @@ export async function saveTemplate(tpl) {
 export async function deleteTemplate(id) {
   return withLock(async () => {
     const templates = (await listTemplates()).filter(t => t.id !== id);
-    await local().set({ templates });
+    await save({ templates });
     return templates;
   });
 }
@@ -142,18 +200,18 @@ export async function bumpTemplateUse(id) {
   return withLock(async () => {
     const templates = await listTemplates();
     const t = templates.find(x => x.id === id);
-    if (t) { t.uses = (t.uses || 0) + 1; await local().set({ templates }); }
+    if (t) { t.uses = (t.uses || 0) + 1; await save({ templates }); }
   });
 }
 
 // ─── Session (in-memory, cleared when the browser closes) ────────────────────
 export async function saveSession(data) {
-  await session().set({ draft: { ...data, savedAt: Date.now() } });
+  await save({ draft: { ...data, savedAt: Date.now() } }, session());
 }
 
 export async function getSession(url) {
   const { draft } = await session().get('draft');
-  if (!draft || draft.url !== url) return null;
+  if (!isObj(draft) || draft.url !== url || !Number.isFinite(draft.savedAt)) return null;
   if (Date.now() - draft.savedAt > LIMITS.SESSION_TTL_MS) return null;
   return draft;
 }

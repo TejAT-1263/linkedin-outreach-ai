@@ -145,9 +145,15 @@ async function generate({ regenerate }) {
 }
 
 // ─── Insert / copy ────────────────────────────────────────────────────────────
+let inserting = false;
 async function insert() {
   const text = $('draft-text').value.trim();
-  if (!text) return;
+  if (!text || inserting || st.busy) return;
+  inserting = true;
+  try { await doInsert(text); } finally { inserting = false; }
+}
+
+async function doInsert(text) {
   const fmt = FORMATS[st.format];
   if (fmt.hard && text.length > fmt.limit) {
     setStatus('status', `This is ${text.length} characters — a connection note allows ${fmt.limit}. Trim it or click “↻ New version”.`, 'error');

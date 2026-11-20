@@ -39,7 +39,8 @@ export function migrate(data = {}) {
   for (const old of Array.isArray(data.recentContacts) ? data.recentContacts : []) {
     const id = contactIdFromUrl(old.profileUrl) || (old.name ? `name:${String(old.name).toLowerCase()}` : null);
     if (!id || contacts[id]) continue;
-    const t = Number(old.timestamp) || Date.now();
+    const ts = Number(old.timestamp);
+    const t = Number.isFinite(ts) && ts > 0 ? ts : Date.now();
     const status = Object.values(STATUS).includes(old.status) ? old.status : STATUS.DRAFTED;
     contacts[id] = {
       id,
