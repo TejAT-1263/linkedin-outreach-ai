@@ -9,7 +9,7 @@
   --border-strong: #CFC4B3;
   --text: #1A1712;
   --text-2: #675E52;
-  --text-3: #8C8274;
+  --text-3: #6B6256;
   --accent: #1A56DB;
   --accent-hover: #1547B8;
   --accent-soft: #EAF0FF;
@@ -34,7 +34,7 @@
   :root:not([data-theme="light"]) {
     --bg: #15171B; --surface: #1D2026; --surface-2: #23272E; --surface-3: #2B3038;
     --border: #2F343C; --border-strong: #3D434D;
-    --text: #ECEDEF; --text-2: #A9AEB7; --text-3: #7D838D;
+    --text: #ECEDEF; --text-2: #B4B9C1; --text-3: #9CA2AB;
     --accent: #5B8CFF; --accent-hover: #7AA2FF; --accent-soft: #1E2A44; --accent-text: #0D1424;
     --success: #34D399; --success-soft: #0F2A21; --warning: #FBBF24; --warning-soft: #2E2510;
     --danger: #F87171; --danger-soft: #331A1A; --common: #B79CFF; --common-soft: #2A2342;
@@ -46,7 +46,7 @@
 :root[data-theme="dark"] {
   --bg: #15171B; --surface: #1D2026; --surface-2: #23272E; --surface-3: #2B3038;
   --border: #2F343C; --border-strong: #3D434D;
-  --text: #ECEDEF; --text-2: #A9AEB7; --text-3: #7D838D;
+  --text: #ECEDEF; --text-2: #B4B9C1; --text-3: #9CA2AB;
   --accent: #5B8CFF; --accent-hover: #7AA2FF; --accent-soft: #1E2A44; --accent-text: #0D1424;
   --success: #34D399; --success-soft: #0F2A21; --warning: #FBBF24; --warning-soft: #2E2510;
   --danger: #F87171; --danger-soft: #331A1A; --common: #B79CFF; --common-soft: #2A2342;
@@ -72,6 +72,7 @@ code { font-family: 'SF Mono', ui-monospace, Menlo, monospace; font-size: 11.5px
 :focus-visible { outline: none; box-shadow: var(--focus); }
 
 .app { display: flex; flex-direction: column; height: 100%; }
+.main { flex: 1; min-height: 0; display: flex; flex-direction: column; }
 
 /* ── Header ── */
 .app-header { display: flex; align-items: center; gap: 9px; padding: 11px 14px 10px; background: var(--surface); border-bottom: 1px solid var(--border); flex-shrink: 0; }
@@ -143,7 +144,7 @@ textarea.input { resize: vertical; line-height: 1.45; }
 /* Segmented control */
 .segmented { display: flex; gap: 2px; padding: 2px; background: var(--surface-2); border: 1px solid var(--border); border-radius: var(--radius-sm); }
 .seg { flex: 1; padding: 6px 4px; font-size: 11.5px; font-weight: 500; color: var(--text-2); background: none; border: 0; border-radius: 5px; cursor: pointer; white-space: nowrap; transition: background .15s, color .15s; }
-.seg small { font-size: 10px; opacity: .7; font-variant-numeric: tabular-nums; }
+.seg small { font-size: 10px; font-variant-numeric: tabular-nums; color: inherit; }
 .seg:hover { color: var(--text); }
 .seg.active { background: var(--surface); color: var(--accent); font-weight: 650; box-shadow: var(--shadow); }
 .segmented.small .seg { font-size: 11px; padding: 5px 2px; }

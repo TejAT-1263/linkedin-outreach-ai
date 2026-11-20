@@ -22,7 +22,7 @@ export function init(appCtx) {
     theme = b.dataset.theme;
     setSegmented('s-theme', 'theme', theme);
     app.applyTheme(theme); // live preview; persisted on save (and right away below)
-    call(ACTIONS.SAVE_SETTINGS, { theme }).then(r => { app.state.settings = r.settings; }).catch(() => {});
+    call(ACTIONS.SAVE_SETTINGS, { theme }).then(r => { app.state.settings = r.settings; }).catch(err => toast(`Couldn't save the theme: ${err.message}`, 'error'));
   });
   wireSegmentedKeys('s-theme');
   $('export-btn-2').addEventListener('click', exportCsv);
@@ -30,7 +30,13 @@ export function init(appCtx) {
 
   const dz = $('dropzone');
   dz.addEventListener('click', () => $('resume-input').click());
-  dz.addEventListener('keydown', (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); $('resume-input').click(); } });
+  // Like a native button: Enter activates on keydown, Space on keyup (Chrome only grants the
+  // user activation a file picker needs on Space's keyup).
+  dz.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('resume-input').click(); }
+    if (e.key === ' ') e.preventDefault(); // don't scroll
+  });
+  dz.addEventListener('keyup', (e) => { if (e.key === ' ') { e.preventDefault(); $('resume-input').click(); } });
   dz.addEventListener('dragover', (e) => { e.preventDefault(); dz.classList.add('over'); });
   dz.addEventListener('dragleave', () => dz.classList.remove('over'));
   dz.addEventListener('drop', (e) => { e.preventDefault(); dz.classList.remove('over'); if (e.dataTransfer.files[0]) resume(e.dataTransfer.files[0]); });

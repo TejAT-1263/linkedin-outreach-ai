@@ -3,8 +3,36 @@
 Two rounds of work on the original v3.1.0 extension:
 - **v3.2.0**: fix what was broken, make it honest, make the messages fit LinkedIn, insert into LinkedIn. (Original audit and steps at the bottom.)
 - **v3.3.0**: production-grade structure, follow-up tracking, profile read check, templates, dark mode, tests and CI.
+- **v3.3.1**: tests for every scenario I could identify (178), failure hardening, and 9 bugs found and fixed.
 
 Each step is also a commit: `git log --oneline`.
+
+---
+
+## v3.3.1 — Testing and hardening
+
+**Goal:** prove every scenario I could identify with an automated test, and make each failure degrade gracefully. **Result:** 178 tests (102 unit, 21 content-script in real Chrome, 55 end-to-end steps), 100% line coverage of background and shared code, 95–100% browser coverage of the popup, WCAG 2 AA checks in both themes, and 3 consecutive green runs. The full matrix is in [TESTING.md](TESTING.md).
+
+### Step 11 — Hardening
+- Storage is **repaired on read**. Every contact, setting, preference and template is validated, and anything beyond repair is dropped instead of crashing the popup.
+- **Storage full / write errors** give a clear message ("Export your tracker…"), and the write lock recovers.
+- **Tab messaging has timeouts** (20 s read, 5 s insert). A blocked injection and an unreachable tab each get their own message.
+- Badge and notification failures can never break a request. Blocked notifications are retried later.
+- The router rejects malformed and prototype-key requests. Every listener in the worker is wrapped so errors are logged, never unhandled.
+- The popup has a safety net for uncaught errors. Insert, Copy and New version are disabled while the extension is working.
+
+### Step 12 — Tests for every scenario
+- Unit: failure-injecting Chrome mock; seeded fuzzing (5,000 hostile inputs per property); coverage gate (lines 100 %, branches/functions 95 %).
+- Content script in real Chrome against 21 LinkedIn-like layouts: modern, legacy, German, broken, script-injection text, unicode, hidden boxes, rejecting editors, huge pages.
+- End-to-end: a fake Anthropic API at network level (so the real AI path runs), 13 injected background failures, corrupted storage, keyboard-only use, axe accessibility in light and dark, and browser coverage with a ≥ 90 % gate.
+
+### Bugs found and fixed
+Nine real defects. Each one is listed in [TESTING.md](TESTING.md#bugs-the-tests-found-all-fixed). The most user-visible:
+- Insert silently did nothing during "Re-read".
+- "Tracker cleared" was shown even when clearing failed.
+- Validation messages were replaced by a generic error.
+- Hint text failed contrast standards.
+- The resume drop zone ignored the Space key.
 
 ---
 

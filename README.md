@@ -23,17 +23,20 @@ Without an API key everything runs locally, and nothing leaves your browser.
 
 ## What's new
 See **[docs/CHANGELOG.md](docs/CHANGELOG.md)**: the original audit, every change step by step, and why.
+See **[docs/TESTING.md](docs/TESTING.md)**: 178 tests, the full scenario matrix, the bugs they found, and the 5-minute manual check for live LinkedIn.
 See **[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)**: module map, data model, reliability, security and the scaling plan.
 
 ## Develop
 ```bash
 npm ci
+npm run check       # everything below (~95 s)
 npm run lint        # ESLint
-npm test            # 48 unit tests (node:test)
-npm run test:e2e    # 14-step Playwright run in real Chrome against mock LinkedIn pages
-                    #   (set CHROME_PATH=/path/to/chrome to use an installed Chrome)
+npm test            # 102 unit tests + coverage gate (100% lines)
+npm run test:dom    # 21 content-script tests in real Chrome
+npm run test:e2e    # 55 end-to-end steps in real Chrome + popup coverage gate (≥90%)
+npm run test:fuzz   # 5,000-case property fuzzing (FUZZ_SEED=… to reproduce)
 npm run package     # validates manifest → dist/linkedin-outreach-ai-v<version>.zip
-npm run check       # all of the above except package
+# Set CHROME_PATH=/path/to/chrome to use an installed Chrome instead of Playwright's.
 ```
 
 ```
@@ -44,10 +47,11 @@ extension/
   content/      content_script.js   (all LinkedIn selectors in one SELECTORS block)
   popup/        popup.html · popup.css · main · write · tracker · settings · api · dom
   shared/       constants.js · text.js
-tests/unit/     *.test.mjs + helpers (chrome mock, fixtures)
-tests/e2e/      run.mjs + mock LinkedIn pages
-scripts/        package.mjs · make_icons.py
-docs/           CHANGELOG · ARCHITECTURE · LOOM_OUTLINE
+tests/unit/     102 tests: *.test.mjs + helpers (fault-injecting chrome mock, fuzz PRNG, fixtures)
+tests/dom/      21 content-script tests in real Chrome
+tests/e2e/      harness · run (journey) · scenarios · ui-edges · mock LinkedIn pages
+scripts/        package · coverage-report · coverage-gaps · make_icons
+docs/           CHANGELOG · TESTING · ARCHITECTURE · LOOM_OUTLINE
 ```
 
 ## Known limits

@@ -98,8 +98,12 @@ function card(c) {
     h('button', { class: 'icon-btn danger', type: 'button', title: 'Remove from tracker', 'aria-label': `Remove ${c.name}`, onclick: () => remove(c, el) }, '×')
   );
 
-  const msg = h('p', { class: 'contact-msg', tabindex: '0', title: 'Click to expand', onclick: () => el.classList.toggle('expanded'),
-    onkeydown: (e) => { if (e.key === 'Enter') el.classList.toggle('expanded'); } }, c.message || '');
+  const toggle = () => { const on = el.classList.toggle('expanded'); msg.setAttribute('aria-expanded', String(on)); };
+  const msg = h('p', {
+    class: 'contact-msg', tabindex: '0', role: 'button', 'aria-expanded': 'false', title: 'Show the full message',
+    onclick: toggle,
+    onkeydown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); toggle(); } }
+  }, c.message || '');
 
   el.append(
     h('div', { class: 'contact-top' },
@@ -162,7 +166,12 @@ async function remove(c, el) {
     setTimeout(() => { delete el.dataset.confirm; }, 3000);
     return;
   }
-  await call(ACTIONS.DELETE_CONTACT, { contactId: c.id }).catch(err => toast(err.message, 'error'));
+  try {
+    await call(ACTIONS.DELETE_CONTACT, { contactId: c.id });
+  } catch (err) {
+    toast(err.message, 'error');
+    return; // keep the card where it is
+  }
   await load();
 }
 
@@ -185,7 +194,11 @@ async function clearAll() {
   }
   clearArmed = false;
   $('clear-btn').textContent = 'Clear tracker';
-  await call(ACTIONS.CLEAR_CONTACTS).catch(err => toast(err.message, 'error'));
+  try {
+    await call(ACTIONS.CLEAR_CONTACTS);
+    toast('Tracker cleared.');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
   await load();
-  toast('Tracker cleared.');
 }

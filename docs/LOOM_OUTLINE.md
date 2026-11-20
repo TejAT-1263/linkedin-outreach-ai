@@ -28,7 +28,7 @@ Talking points, not a script. Say it in your own words. Keep a browser tab ready
   2. **Schema migrations**: users of the old version keep their data, and the stored PDF gets deleted.
   3. **API client** with timeout, backoff and `Retry-After`; **router** that only accepts our own popup and validates every input.
 - **Read check + one `SELECTORS` block**: when LinkedIn changes, you find out and fix it in one place.
-- Run `npm run check` live: lint, 48 unit tests, 14-step e2e in real Chrome.
+- Run `npm run check` live: 178 tests in about 95 s. Show `docs/TESTING.md`: the scenario matrix, the fake API used to test the real AI path, injected failures, accessibility checks, coverage gates, and **the 9 bugs the tests caught**.
 
 ## 5. Scaling + trade-offs (40 s)
 - "It's fully client-side, so it scales per user by construction: no server to overload. I deliberately didn't add a backend because the brief said not to rebuild." Show the scaling section: stateless API behind a gateway, LLM proxy with quotas, Postgres with row-level security, and why the client is already shaped for it (one storage boundary, injectable API client, stable contact ids).

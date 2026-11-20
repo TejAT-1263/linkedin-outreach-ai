@@ -1,55 +1,19 @@
-// End-to-end: real Chrome + the unpacked extension; linkedin.com is routed to local mock pages.
+// Happy-path e2e: the full user journey in real Chrome with the unpacked extension.
 // Usage: node tests/e2e/run.mjs [screenshotsDir]   (CHROME_PATH to use a specific Chrome binary)
-import { chromium } from 'playwright';
-import { readFileSync, mkdirSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import { mkdirSync } from 'node:fs';
 import path from 'node:path';
 import assert from 'node:assert/strict';
+import { launch, steps, mockHtml, ROOT } from './harness.mjs';
 
-const here = path.dirname(fileURLToPath(import.meta.url));
-const EXT = path.resolve(here, '../../extension');
-const SHOTS = path.resolve(process.argv[2] || path.join(here, '../../screenshots'));
+const SHOTS = path.resolve(process.argv[2] || path.join(ROOT, 'screenshots'));
 mkdirSync(SHOTS, { recursive: true });
-const MOCK = readFileSync(path.join(here, 'mock/profile.html'), 'utf8');
-const BROKEN = readFileSync(path.join(here, 'mock/broken.html'), 'utf8');
+const env = await launch({ pages: { '/in/alex-kim': mockHtml('broken.html') } });
+const { ctx, sw, errors } = env;
+const { step, report } = steps();
 
-const results = [];
-const step = async (name, fn) => {
-  try { await fn(); results.push(['PASS', name]); }
-  catch (err) { results.push(['FAIL', name, err.message.split('\n')[0]]); }
-};
-
-const ctx = await chromium.launchPersistentContext('', {
-  executablePath: process.env.CHROME_PATH || undefined,
-  channel: process.env.CHROME_PATH ? undefined : 'chromium',
-  headless: true,
-  args: ['--headless=new', `--disable-extensions-except=${EXT}`, `--load-extension=${EXT}`, '--no-sandbox'],
-  permissions: ['clipboard-read', 'clipboard-write']
-});
-await ctx.route('https://www.linkedin.com/**', r => {
-  const url = r.request().url();
-  r.fulfill({ status: 200, contentType: 'text/html', body: url.includes('/in/alex-kim') ? BROKEN : MOCK });
-});
-let [sw] = ctx.serviceWorkers();
-if (!sw) sw = await ctx.waitForEvent('serviceworker');
-const extId = sw.url().split('/')[2];
-const errors = [];
-
-const li = await ctx.newPage();
-await li.goto('https://www.linkedin.com/in/priya-sharma/');
-await li.waitForTimeout(600);
+const { page: li, id: tabId } = await env.tab('https://www.linkedin.com/in/priya-sharma/');
 const tabIdOf = (pattern) => sw.evaluate(async (p) => (await chrome.tabs.query({ url: p }))[0].id, pattern);
-const tabId = await tabIdOf('https://www.linkedin.com/in/priya-sharma/*');
-
-async function openPopup(tid) {
-  const p = await ctx.newPage();
-  p.on('pageerror', e => errors.push(`pageerror: ${e.message}`));
-  p.on('console', m => { if (m.type() === 'error') errors.push(`console: ${m.text()}`); });
-  await p.setViewportSize({ width: 400, height: 590 });
-  await p.goto(`chrome-extension://${extId}/popup/popup.html?tabId=${tid}`);
-  await p.waitForSelector('body.booted');
-  return p;
-}
+const openPopup = (tid) => env.popup(tid);
 
 let pop = await openPopup(tabId);
 const shot = async (name, page = pop) => { await page.waitForTimeout(350); await page.screenshot({ path: path.join(SHOTS, `${name}.png`) }); };
@@ -237,8 +201,7 @@ await step('non-profile page disables reading', async () => {
 
 await step('no console or page errors', async () => { assert.deepEqual(errors, []); });
 
+await pop.close();
+await env.saveCoverage('journey');
 await ctx.close();
-for (const r of results) console.log(r.join('  '));
-const failed = results.filter(r => r[0] === 'FAIL').length;
-console.log(`\n${results.length - failed}/${results.length} e2e steps passed`);
-process.exit(failed ? 1 : 0);
+process.exit(report('e2e journey') ? 1 : 0);

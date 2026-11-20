@@ -84,6 +84,7 @@ function setFormat(f) {
 }
 
 function savePrefs() {
+  // Best-effort: remembering last-used options must never interrupt writing.
   call(ACTIONS.SAVE_PREFS, { messageType: $('message-type').value, tone: $('tone').value, format: st.format }).catch(() => {});
 }
 
@@ -196,6 +197,7 @@ async function copy() {
 }
 
 async function track(event) {
+  // Best-effort: the copy itself already succeeded; tracking is a bonus.
   if (!st.contact?.id) return;
   await call(ACTIONS.TRACK, { contactId: st.contact.id, event, message: $('draft-text').value }).catch(() => {});
 }
@@ -344,6 +346,8 @@ function updateMeter() {
 
 function setBusy(on, which) {
   st.busy = on;
+  // While anything is working, nothing that depends on the draft can be clicked.
+  for (const id of ['insert-btn', 'copy-btn', 'regen-btn']) $(id).disabled = on;
   if (which === 'read') {
     $('read-btn').disabled = on || !st.onProfile;
     $('read-btn').setAttribute('aria-busy', String(on));
@@ -351,8 +355,6 @@ function setBusy(on, which) {
     else $('read-label').textContent = st.profile ? 'Re-read profile' : 'Read profile & draft';
     show('read-spinner', on);
   } else {
-    $('regen-btn').disabled = on;
-    $('insert-btn').disabled = on;
     $('regen-btn').setAttribute('aria-busy', String(on));
     show('regen-spinner', on);
   }
@@ -363,6 +365,7 @@ let persistTimer;
 function persistSoon() { clearTimeout(persistTimer); persistTimer = setTimeout(persist, 300); }
 
 function persist() {
+  // Best-effort autosave; the draft is still on screen if this fails.
   if (!st.profile) return;
   call(ACTIONS.SAVE_SESSION, {
     url: st.tabUrl, profile: st.profile, hooks: st.hooks, variant: st.variant,

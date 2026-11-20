@@ -31,7 +31,7 @@ export function installChromeMock() {
   const badge = { text: '', fail: false };
   const tabsState = { tabs: new Map(), active: null, onSend: null, injectFails: false, injected: 0 };
   globalThis.chrome = {
-    runtime: { id: 'testext', getManifest: () => ({ version: '3.3.0' }), getURL: (p) => `chrome-extension://testext/${p}` },
+    runtime: { id: 'testext', getManifest: () => ({ version: '3.3.1' }), getURL: (p) => `chrome-extension://testext/${p}` },
     storage: { local: area(), session: area() },
     action: {
       setBadgeText: async ({ text }) => { if (badge.fail) throw new Error('badge'); badge.text = text; },
