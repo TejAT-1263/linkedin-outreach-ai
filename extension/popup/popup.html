@@ -1,0 +1,244 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="color-scheme" content="light dark" />
+  <title>LinkedIn Outreach AI</title>
+  <link rel="stylesheet" href="popup.css" />
+</head>
+<body>
+<div class="app">
+
+  <header class="app-header">
+    <img class="header-icon" src="../icons/icon48.png" width="22" height="22" alt="" />
+    <h1 class="app-title">Outreach AI</h1>
+    <button class="key-status" id="key-status" type="button" title=""></button>
+  </header>
+
+  <nav class="tab-nav" role="tablist" aria-label="Sections">
+    <button class="tab-btn active" role="tab" id="tabbtn-write" aria-controls="tab-write" aria-selected="true" data-tab="write">Write</button>
+    <button class="tab-btn" role="tab" id="tabbtn-tracker" aria-controls="tab-tracker" aria-selected="false" data-tab="tracker">Tracker <span class="tab-badge hidden" id="due-badge"></span></button>
+    <button class="tab-btn" role="tab" id="tabbtn-settings" aria-controls="tab-settings" aria-selected="false" data-tab="settings">Settings</button>
+  </nav>
+
+  <!-- ═════════════ WRITE ═════════════ -->
+  <section class="tab-content active" id="tab-write" role="tabpanel" aria-labelledby="tabbtn-write">
+
+    <div class="alert alert-warn hidden" id="page-warning" role="note">
+      Open someone's LinkedIn profile (<code>linkedin.com/in/…</code>) to start.
+    </div>
+    <div class="alert alert-tip hidden" id="setup-tip" role="note">
+      Add your name and background in <button class="link" type="button" data-goto="settings">Settings</button> so messages can mention what you have in common.
+    </div>
+
+    <div class="profile-card hidden" id="profile-card">
+      <div class="avatar" id="profile-avatar" aria-hidden="true">?</div>
+      <div class="profile-details">
+        <div class="profile-name" id="profile-name"></div>
+        <div class="profile-headline" id="profile-headline"></div>
+      </div>
+      <button class="read-pill hidden" id="read-pill" type="button" aria-describedby="read-detail"></button>
+    </div>
+    <div class="read-detail hidden" id="read-detail" role="note"></div>
+    <div class="alert alert-error hidden" id="layout-warning" role="alert">
+      LinkedIn's page layout may have changed — the essentials (headline / experience) weren't found, so drafts will be generic. Try reloading the page, or add your own detail below.
+    </div>
+
+    <div class="contact-banner hidden" id="contact-banner" role="note">
+      <span id="contact-banner-text"></span>
+      <button class="link" type="button" data-goto="tracker">View in Tracker</button>
+    </div>
+
+    <div class="profile-skeleton hidden" id="profile-skeleton" aria-hidden="true">
+      <div class="sk sk-avatar"></div><div class="sk-lines"><div class="sk sk-line"></div><div class="sk sk-line short"></div></div>
+    </div>
+
+    <div class="controls-row">
+      <label class="field">
+        <span class="field-label">Purpose</span>
+        <select id="message-type" class="input select">
+          <option value="Networking">Networking</option>
+          <option value="Job">Job opportunity</option>
+          <option value="Referral">Referral request</option>
+          <option value="Collaboration">Collaboration</option>
+        </select>
+      </label>
+      <label class="field">
+        <span class="field-label">Tone</span>
+        <select id="tone" class="input select">
+          <option value="Formal">Formal</option>
+          <option value="Neutral">Neutral</option>
+          <option value="Casual">Casual</option>
+        </select>
+      </label>
+    </div>
+
+    <div class="field format-field">
+      <span class="field-label" id="format-label">Format</span>
+      <div class="segmented" id="format" role="radiogroup" aria-labelledby="format-label">
+        <button type="button" class="seg" role="radio" data-format="note" title="Note sent with a connection request">Connect note <small>300</small></button>
+        <button type="button" class="seg" role="radio" data-format="note-free" title="Free LinkedIn accounts may get a shorter note">Free-plan note <small>200</small></button>
+        <button type="button" class="seg" role="radio" data-format="dm" title="Message to an existing connection">Message <small>600</small></button>
+      </div>
+    </div>
+
+    <button id="read-btn" class="btn btn-primary btn-full" type="button">
+      <span id="read-label">Read profile &amp; draft</span>
+      <span class="spinner hidden" id="read-spinner" aria-hidden="true"></span>
+    </button>
+
+    <div class="status hidden" id="status" role="status" aria-live="polite"></div>
+
+    <div class="draft hidden" id="draft">
+      <div class="draft-head">
+        <label class="draft-source">
+          <span class="sr-only">Write with</span>
+          <select id="source-select" class="source-select" title="Write with the built-in writer / AI, or start from a saved template"></select>
+        </label>
+        <span class="char-count" id="char-count" aria-live="polite">0 / 300</span>
+      </div>
+      <div class="meter" aria-hidden="true"><div class="meter-fill" id="meter-fill"></div></div>
+      <textarea id="draft-text" class="draft-text" rows="7" spellcheck="true" aria-label="Draft message"></textarea>
+      <div class="draft-actions">
+        <button id="regen-btn" class="btn btn-secondary" type="button" title="Write a different version (Alt+N)">
+          <span class="spinner dark hidden" id="regen-spinner" aria-hidden="true"></span><span>↻ New version</span>
+        </button>
+        <button id="copy-btn" class="btn btn-secondary" type="button" title="Copy to clipboard">Copy</button>
+        <button id="insert-btn" class="btn btn-primary grow" type="button" title="Put this into the open LinkedIn note or message box (Ctrl/⌘+Enter)">Insert into LinkedIn</button>
+      </div>
+      <div class="draft-foot">
+        <button class="link subtle" type="button" id="save-tpl-open">☆ Save as template</button>
+        <span class="hint">Ctrl/⌘+Enter to insert · Alt+N new version</span>
+      </div>
+      <form class="inline-form hidden" id="save-tpl-form">
+        <input id="tpl-name" class="input" type="text" maxlength="60" placeholder="Template name, e.g. Referral — warm" required />
+        <button class="btn btn-primary btn-sm" type="submit">Save</button>
+        <button class="btn btn-secondary btn-sm" type="button" id="save-tpl-cancel">Cancel</button>
+      </form>
+    </div>
+
+    <div class="hooks hidden" id="hooks">
+      <div class="hooks-title">What to mention <span class="muted">— pick up to 2 · ★ = in common</span></div>
+      <div class="hook-list" id="hook-list" role="group" aria-label="Details to mention"></div>
+      <form class="inline-form" id="custom-hook-form">
+        <input id="custom-hook" class="input" type="text" maxlength="140" placeholder="Add your own detail, e.g. We met at the Pune product meetup" aria-label="Add your own detail" />
+        <button class="btn btn-secondary btn-sm" type="submit">Add</button>
+      </form>
+    </div>
+  </section>
+
+  <!-- ═════════════ TRACKER ═════════════ -->
+  <section class="tab-content" id="tab-tracker" role="tabpanel" aria-labelledby="tabbtn-tracker">
+    <div class="stats" id="stats">
+      <div class="stat"><span class="stat-num" id="stat-reached">0</span><span class="stat-label">Reached out</span></div>
+      <div class="stat"><span class="stat-num" id="stat-replied">0</span><span class="stat-label">Replied</span></div>
+      <div class="stat"><span class="stat-num" id="stat-rate">–</span><span class="stat-label">Reply rate</span></div>
+    </div>
+    <div class="insight hidden" id="insight"></div>
+
+    <div class="tracker-controls">
+      <input id="tracker-search" class="input" type="search" placeholder="Search name or company" aria-label="Search contacts" />
+      <div class="segmented small" id="tracker-filter" role="radiogroup" aria-label="Filter">
+        <button type="button" class="seg active" role="radio" aria-checked="true" data-filter="all">All</button>
+        <button type="button" class="seg" role="radio" aria-checked="false" data-filter="due">Due <span id="due-count"></span></button>
+        <button type="button" class="seg" role="radio" aria-checked="false" data-filter="waiting">Waiting</button>
+        <button type="button" class="seg" role="radio" aria-checked="false" data-filter="replied">Replied</button>
+        <button type="button" class="seg" role="radio" aria-checked="false" data-filter="drafts">Drafts</button>
+      </div>
+    </div>
+
+    <div id="contact-list" class="contact-list"></div>
+    <button class="btn btn-secondary btn-full hidden" id="more-btn" type="button">Show more</button>
+    <div class="empty hidden" id="tracker-empty">
+      <div class="empty-icon" aria-hidden="true">✉︎</div>
+      <p id="tracker-empty-title">No one here yet.</p>
+      <p class="muted" id="tracker-empty-hint">People you write to show up here. Insert a note and you'll get a reminder to follow up if they don't reply.</p>
+    </div>
+
+    <div class="tracker-foot">
+      <button class="link subtle" type="button" id="export-btn">Export CSV</button>
+      <button class="link danger" type="button" id="clear-btn">Clear tracker</button>
+    </div>
+  </section>
+
+  <!-- ═════════════ SETTINGS ═════════════ -->
+  <section class="tab-content" id="tab-settings" role="tabpanel" aria-labelledby="tabbtn-settings">
+    <form id="settings-form" class="settings" novalidate>
+
+      <fieldset class="card">
+        <legend>About you</legend>
+        <label class="field"><span class="field-label">Your name</span>
+          <input id="s-name" class="input" type="text" maxlength="80" placeholder="Jane Smith" autocomplete="name" /></label>
+        <label class="field"><span class="field-label">One line about you</span>
+          <input id="s-bio" class="input" type="text" maxlength="160" placeholder="I'm a product engineer building AI tools for students." /></label>
+        <label class="field"><span class="field-label">Your background</span>
+          <textarea id="s-background" class="input" rows="2" maxlength="1000" placeholder="Companies, schools, skills, city — comma separated"></textarea>
+          <span class="hint">Used to spot what you have in common with each person.</span></label>
+        <div class="field">
+          <span class="field-label">Resume (PDF) <span class="muted">— fills in your background, needs an API key</span></span>
+          <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload resume PDF">
+            <span id="dropzone-label">Click or drop a PDF</span>
+            <input id="resume-input" type="file" accept="application/pdf,.pdf" hidden />
+          </div>
+          <div class="note hidden" id="resume-status" role="status"></div>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>AI writing <span class="muted">(optional)</span></legend>
+        <p class="hint">Without a key, the built-in writer runs locally and nothing leaves your browser. With your own Anthropic key, drafts are written by Claude.</p>
+        <div class="key-row">
+          <input id="s-key" class="input mono" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" aria-label="Anthropic API key" />
+          <button class="btn btn-primary btn-sm" type="button" id="test-key-btn">Test &amp; save</button>
+        </div>
+        <div class="key-meta">
+          <span class="muted" id="key-hint"></span>
+          <button class="link danger hidden" type="button" id="remove-key-btn">Remove key</button>
+        </div>
+        <div class="note hidden" id="key-status-note" role="status"></div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Follow-ups</legend>
+        <div class="row">
+          <label class="field inline"><span class="field-label">Remind me after</span>
+            <input id="s-days" class="input num" type="number" min="1" max="30" step="1" /> <span>days without a reply</span></label>
+        </div>
+        <label class="check"><input type="checkbox" id="s-notify" /> Desktop notification when a follow-up is due</label>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Appearance</legend>
+        <div class="segmented" id="s-theme" role="radiogroup" aria-label="Theme">
+          <button type="button" class="seg" role="radio" data-theme="system">System</button>
+          <button type="button" class="seg" role="radio" data-theme="light">Light</button>
+          <button type="button" class="seg" role="radio" data-theme="dark">Dark</button>
+        </div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Templates</legend>
+        <div id="tpl-list" class="tpl-list"></div>
+        <p class="hint" id="tpl-empty">Save a draft you like with “☆ Save as template”. Names, company and title become placeholders, so it works for anyone.</p>
+      </fieldset>
+
+      <button class="btn btn-primary btn-full" type="submit" id="save-settings-btn">Save settings</button>
+      <div class="status hidden" id="settings-status" role="status" aria-live="polite"></div>
+
+      <fieldset class="card subtle">
+        <legend>Your data</legend>
+        <p class="hint">Everything is stored on this device. Profile text and your resume are only sent to Anthropic when you add your own API key.</p>
+        <div class="row gap">
+          <button class="btn btn-secondary btn-sm" type="button" id="export-btn-2">Export tracker (CSV)</button>
+          <button class="btn btn-danger btn-sm" type="button" id="reset-btn">Reset everything</button>
+        </div>
+      </fieldset>
+      <p class="version muted" id="version"></p>
+    </form>
+  </section>
+
+  <div class="toast hidden" id="toast" role="status" aria-live="polite"></div>
+</div>
+<script type="module" src="main.js"></script>
+</body>
+</html>
