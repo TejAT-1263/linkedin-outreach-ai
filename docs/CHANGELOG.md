@@ -1,10 +1,83 @@
-# LinkedIn Outreach AI — v3.1.0 → v3.2.0
+# Changelog
+
+Two rounds of work on the original v3.1.0 extension:
+- **v3.2.0**: fix what was broken, make it honest, make the messages fit LinkedIn, insert into LinkedIn. (Original audit and steps at the bottom.)
+- **v3.3.0**: production-grade structure, follow-up tracking, profile read check, templates, dark mode, tests and CI.
+
+Each step is also a commit: `git log --oneline`.
+
+---
+
+## v3.3.0
+
+### Step 5 — Production-grade structure
+**Why:** v3.2 worked, but it was two 500-line files with storage calls scattered across both. That makes it hard to test, easy to corrupt data, and painful to change when LinkedIn does.
+
+**What:**
+- Split into ES modules: `shared/` (constants + pure text helpers), `background/` (router + one module per concern), `content/`, and `popup/` (one module per tab). The service worker runs as `"type": "module"`.
+- **Router** (`background/router.js`): one entry point. It checks that the sender is our own popup, rejects unknown actions, validates and length-caps every input, and returns user-safe errors. Unexpected errors are logged and masked.
+- **Storage layer** (`background/store.js`): the only code that touches `chrome.storage`. Every read-modify-write runs through a lock, so the popup and the hourly alarm can't overwrite each other.
+- **Schema v2 + migrations** (`background/migrate.js`): upgrades data from the original v3.1 and from v3.2 automatically. Contacts are now keyed by profile (`in:<slug>`), so no duplicates. The PDF the original stored is deleted.
+- **API client** (`background/anthropic.js`): 30 s timeout, up to 2 retries with exponential backoff and jitter, honours `Retry-After`, never retries auth errors, and gives clear error messages.
+- **The API key never goes back to the UI.** The popup only sees `hasKey` and a masked hint (`sk-ant-…1234`).
+- **Strict Content Security Policy.** No `innerHTML` with data anywhere in the popup.
+- **Draft session** moved to `chrome.storage.session`: in memory and cleared when the browser closes.
+
+### Step 6 — Follow-ups and reply tracking (new Tracker tab)
+**Why:** most replies on LinkedIn come after a follow-up, and the extension forgot people the moment you closed it.
+
+**What:**
+- Each person moves through **Draft → Copied → Inserted → Sent → Replied**. Insert sets it automatically; you mark Sent or Replied with one click (the extension never presses Send, so it can't know).
+- **Reminders:** after N days without a reply (default 5, set in Settings), the person moves to *Due*. The toolbar icon shows a **badge count**, an optional desktop notification fires once per due cycle, and clicking it opens their profile. Later follow-ups wait longer (5 → 7 → 9 days) and stop after 3.
+- **Write follow-up:** a short follow-up that refers to the original note. The second one offers a polite way out. Built-in or AI. Copy it, open the profile, and **Mark as sent** to log it.
+- **Stats:** reached out, replied, reply rate, plus an insight line showing which kind of opener gets replies (e.g. "Common ground — 2 of 3 replied").
+- **Search, filters** (All / Due / Waiting / Replied / Drafts), **paging**, and **CSV export** (opens correctly in Excel and is safe against formula injection).
+- **"Already contacted" banner** on the Write tab when you open someone you've written to before.
+
+### Step 7 — Profile read check
+**Why:** LinkedIn changes its markup often. When the scraper breaks, the old version silently produced generic messages.
+
+**What:**
+- The content script reports which of 8 parts it found (name, headline, location, about, experience, education, skills, recent posts). The popup shows a **"6/8 read"** pill; click it for the list.
+- If the essentials are missing (no headline *and* no experience), a **layout-change warning** explains that drafts will be generic.
+- Sections are found by LinkedIn's anchor ids first (language-independent), then by heading text. All selectors live in one `SELECTORS` block.
+- Insert now **checks the text actually landed**. If LinkedIn rejected it, the draft is copied and you're told to paste.
+
+### Step 8 — Saved templates
+**What:** **☆ Save as template** on any draft. Their name, company and title, your name, and the opening detail become `{firstName}`, `{company}`, `{title}`, `{myName}` and `{hook}`. Pick a template from the menu above the draft and it's filled in for the next person, with sensible fallbacks for missing values. Templates for the current purpose are listed first. Manage or delete them in Settings, where usage counts are shown.
+
+### Step 9 — Dark mode and polish
+- **Theme:** System / Light / Dark, built on a full set of colour variables (contrast checked by eye in both themes).
+- **Shortcuts:** `Alt+Shift+O` opens the extension; `Ctrl/⌘+Enter` inserts; `Alt+N` writes a new version.
+- **Accessibility:** proper tab roles, arrow-key navigation, visible focus rings, `aria-live` status messages, labelled icon buttons, and `prefers-reduced-motion` respected.
+- **Feel:** loading skeleton while reading, subtle fade-ins, toasts, a two-click confirm on destructive actions (no blocking dialogs), and a grouped Settings page.
+
+### Step 10 — Tooling, tests, CI
+- `npm run lint`: ESLint 9 (flat config). Clean.
+- `npm test`: **48 unit tests** (Node's built-in runner). Covers text helpers, hooks, the built-in writer (180-draft limit matrix), templates, tracker maths, migrations, API retry/timeout, AI prompts, and the router end to end with a mock Chrome (lifecycle, lock under concurrency, paging, CSV, badge, notifications, reset).
+- `npm run test:e2e`: **14-step Playwright run** in real Chrome with the extension loaded and linkedin.com routed to mock pages. It also asserts there are zero console errors and saves the screenshots.
+- `npm run package`: validates the manifest (version match, every referenced file exists) and builds `dist/linkedin-outreach-ai-v3.3.0.zip` (about 61 KB).
+- `.github/workflows/ci.yml`: lint → unit → e2e → package, with the zip and screenshots uploaded as build artifacts.
+
+### Found and fixed by the new tests
+- Applying a template with an empty `{hook}` left a stray leading space.
+- `"SQL"` would have matched `"PostgreSQL"` as common ground. Matching is now whole-word.
+- The toolbar badge could be up to an hour stale. It now refreshes whenever the popup opens.
+
+### Not verified (needs a manual check before the demo)
+- **The live LinkedIn DOM.** The e2e suite runs against mock pages shaped like LinkedIn's.
+- **Real Anthropic API calls.** There was no key in the test environment; the AI path is unit-tested against a stub.
+- **The GitHub Actions run.** The workflow is included but hasn't run on GitHub. Locally I used system Chrome via `CHROME_PATH`.
+
+---
+
+## v3.2.0 (from the original v3.1.0)
 
 A step-by-step log of what I changed, why, and how. The brief was "improve, don't rebuild", so the architecture is the same (popup → background service worker → content script). I fixed what was broken, removed what was misleading, and made the core job — getting a reply — work better.
 
 ---
 
-## Step 0 — Audit (before touching code)
+### Step 0 — Audit (before touching code)
 
 I read every file and used the extension the way a user would. Findings, worst first:
 
@@ -26,7 +99,7 @@ I read every file and used the extension the way a user would. Findings, worst f
 
 ---
 
-## Step 1 — Make it install and work
+### Step 1 — Make it install and work
 
 **Icons** — generated a simple 16/48/128 px icon (`tests/make_icons.py`) and added `action.default_icon`.
 
@@ -41,7 +114,7 @@ I read every file and used the extension the way a user would. Findings, worst f
 
 Purpose, tone and format choices are remembered between uses.
 
-## Step 2 — Make "Deep Mode" honest, then useful
+### Step 2 — Make "Deep Mode" honest, then useful
 
 **Removed** the fake 3-layer pipeline: the OpenAI labels, the L1/L2/L3 status dots, the artificial delay, the two-button scrape-then-generate flow, and the Quick/Deep toggle. Both modes ran the same local code, so there was nothing real to choose between.
 
@@ -59,7 +132,7 @@ Purpose, tone and format choices are remembered between uses.
 
 **Header badge** tells the truth: `Built-in writer` (nothing leaves the device) or `AI · your key`. The settings note now says exactly when data is sent to Anthropic.
 
-## Step 3 — Messages that fit LinkedIn and sound human
+### Step 3 — Messages that fit LinkedIn and sound human
 
 **Format selector:** Connect note (300) · Free-plan note (200) · Message (600 soft cap). Every writer respects the limit.
 
@@ -78,7 +151,7 @@ Purpose, tone and format choices are remembered between uses.
 - If the reply is still over the limit, it gets one "shorten this" pass, then a safe cut as a last resort.
 - Clearer API errors (401 → "key was rejected", 429 → "rate limited").
 
-## Step 4 — Insert into LinkedIn
+### Step 4 — Insert into LinkedIn
 
 New **Insert into LinkedIn** button. The content script finds the box you most likely mean, in this order:
 1. The **"Add a note"** textarea in the Connect dialog.
@@ -92,48 +165,11 @@ Safety and edge cases:
 - Text is inserted with the native value setter / `insertText`, so LinkedIn's own UI registers the change. The extension **never clicks Send**. You review and send it yourself.
 - On success, the Recent entry is marked **Inserted**.
 
-## Smaller fixes
+### Smaller fixes
 
 - The scraper restores your scroll position and works out location for any country (no hard-coded city list). Headline/role extraction handles `Title @ Company`.
 - The content script guards against being injected twice.
 - Cleaned the CSS: removed duplicated resume/upload blocks, unused provider/password/pipeline styles, and `text-transform: uppercase` on the API key field.
 - `esc()` now escapes quotes. The Recent list uses event delegation instead of per-index IDs.
 
----
-
-## How I tested it
-
-| Test | What it checks | Result |
-|---|---|---|
-| `node --check` on all JS + manifest JSON parse | Syntax | Pass |
-| `tests/unit.js` | 144 drafts (3 formats × 4 purposes × 3 tones × 4 variants) against the limit and for stray `undefined`/`null`; sparse profile; New version differs | 0 failures, 128 unique drafts |
-| `tests/ai_unit.js` | AI path with a stubbed Anthropic API: system prompt, limit in prompt, shortening retry, resume document block, no-key error | Pass |
-| `tests/e2e.js` (Playwright + real Chrome, extension loaded, linkedin.com routed to `tests/mock/profile.html`) | Read → hooks → auto-redraft → New version → format switch → Insert into note → replace guard → Insert into message box → copy fallback → session restore → Recent status → non-profile warning; no console errors | Pass |
-
-**Not verified:** the live LinkedIn DOM (the e2e uses a mock page shaped like LinkedIn's), and real Anthropic API calls (no key in the test environment). Both need a manual check on a real profile before the demo. The LinkedIn selectors are the most likely thing to need a tweak, because LinkedIn changes its markup often.
-
-Run the tests (Node 18+, Playwright, Chrome):
-```
-node tests/unit.js ./extension/background.js
-node tests/ai_unit.js ./extension/background.js
-node tests/e2e.js ./extension ./screenshots
-```
-(`popup.html?tabId=<id>` exists only so the e2e test can drive the popup as a normal page.)
-
-## Files changed
-
-| File | Change |
-|---|---|
-| `manifest.json` | v3.2.0, honest description, action icons |
-| `icons/*` | **new** |
-| `background.js` | single router; hooks + common ground; format-aware local writer; new AI prompt + shorten pass; resume reader; recent log; insert relay |
-| `content_script.js` | scraper fixes; **new** `insertMessage` |
-| `popup.html` | one flow; format selector; meter; hook picker; Insert button; background field; removed pipeline UI and `utils/cache.js` |
-| `popup.js` | rewritten around the single flow + session restore |
-| `popup.css` | layout fix, cleanup, styles for new components |
-
-## What I'd do next
-
-1. **Follow-up reminders**: Recent already knows who you inserted a note for. Nudge after 5 days with a follow-up draft.
-2. **Reply-rate tracking**: mark "Replied" in Recent to learn which hooks and purposes work.
-3. **Selector health check**: a tiny self-test that warns when LinkedIn's markup changes, instead of failing silently.
+*(v3.2's test notes and file list are superseded by v3.3: see the README for the current layout and test commands. The v3.2 "what next" list (follow-up reminders, reply tracking, selector health check) was built in v3.3.)*
