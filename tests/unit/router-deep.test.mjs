@@ -136,17 +136,24 @@ test('a rejected key stops after L1 (L2 skipped, no second charge)', async () =>
   assert.equal((await call('deepStatus', { url: PRIYA.profileUrl })).data.deep.l2.status, 'skipped');
 });
 
-test('L2 failure is reported; asking again retries the research', async () => {
+test('L2 failure is reported as it is (never searched again silently); Read + research retries', async () => {
   await withKey();
   ai.queue.push(L1, err(400, { message: 'web_search is not available for this model' }));
   await call('deepParse', { tabId: 7 });
+  // The research fails before the popup asks for it (a slow machine): the same failure, no second search.
+  for (let i = 0; i < 50 && (await call('deepStatus', { url: PRIYA.profileUrl })).data.deep.l2.status === 'running'; i++) await tick();
+  const searches = () => ai.requests.filter(r => r.body.tools).length;
   const e = await call('deepEnrich', { profileUrl: PRIYA.profileUrl });
   assert.equal(e.data.l2.status, 'failed');
   assert.match(e.data.l2.note, /web_search is not available/);
   assert.ok(e.data.hooks.every(h => !['news', 'work'].includes(h.kind)));
-  ai.queue.push(L2);
+  assert.equal((await call('deepEnrich', { profileUrl: PRIYA.profileUrl })).data.l2.status, 'failed');
+  assert.equal(searches(), 1, 'asking again never triggers another paid search');
+  ai.queue.push(L1, L2);
+  await call('deepParse', { tabId: 7 });
   const retry = await call('deepEnrich', { profileUrl: PRIYA.profileUrl });
   assert.equal(retry.data.l2.status, 'done');
+  assert.equal(searches(), 2);
   // Unreadable research text is a failure, not a crash.
   ai.queue.push(L1, respOk([text('I could not find anything useful.')]));
   await call('deepParse', { tabId: 7 });

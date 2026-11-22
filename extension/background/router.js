@@ -176,8 +176,10 @@ const handlers = {
     if (!cached?.profile) throw new UserError('Run “Read + research” first.', 'no_deep');
     let result;
     if (deepRuns.has(id)) result = await deepRuns.get(id);
-    else if (cached.l2 && !['running', 'failed'].includes(cached.l2.status)) result = { l2: cached.l2, research: cached.research };
-    else result = await startResearch(id, cached.profile, await openaiSettings()); // interrupted or retrying a failure
+    // Finished (done, failed or skipped): report it as it is. Never search again behind the user's back —
+    // a new search costs money and only starts from "Read + research".
+    else if (cached.l2 && cached.l2.status !== 'running') result = { l2: cached.l2, research: cached.research };
+    else result = await startResearch(id, cached.profile, await openaiSettings()); // interrupted by a worker restart
 
     const me = await sender();
     return {
