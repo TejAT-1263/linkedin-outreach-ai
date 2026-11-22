@@ -5,7 +5,7 @@
   "type": "module",
   "description": "Chrome extension: specific LinkedIn outreach notes, one-click insert, follow-up tracking.",
   "engines": {
-    "node": ">=20"
+    "node": ">=22"
   },
   "scripts": {
     "lint": "eslint .",
