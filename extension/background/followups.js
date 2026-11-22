@@ -26,23 +26,24 @@ export async function refresh({ notify = false } = {}) {
   if (!fresh.length) return due.length;
 
   try {
-    notifyUser(fresh);
+    // Await creation so a rejected OS/browser notification isn't recorded as delivered.
+    await notifyUser(fresh);
   } catch { return due.length; /* notifications blocked by the OS/browser: badge still works */ }
   for (const c of fresh) await store.mutateContact(c.id, prev => (prev ? { ...prev, notifiedAt: now } : null));
   return due.length;
 }
 
-function notifyUser(fresh) {
+async function notifyUser(fresh) {
   if (fresh.length === 1) {
     const c = fresh[0];
-    chrome.notifications.create(`fu:${c.id}`, {
+    await chrome.notifications.create(`fu:${c.id}`, {
       type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title: `Follow up with ${c.name}?`,
       message: `No reply yet to your ${c.purpose?.toLowerCase() || ''} note. Open the extension to draft a follow-up.`,
       priority: 0
     });
   } else {
-    chrome.notifications.create('fu:summary', {
+    await chrome.notifications.create('fu:summary', {
       type: 'basic', iconUrl: chrome.runtime.getURL('icons/icon128.png'),
       title: `${fresh.length} follow-ups due`,
       message: fresh.slice(0, 3).map(c => c.name).join(', ') + (fresh.length > 3 ? '…' : ''),

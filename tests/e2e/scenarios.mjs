@@ -63,7 +63,7 @@ await step('save settings: invalid key format blocked; name/background saved', a
   assert.equal((await storage.get('settings')).settings.apiKey, 'sk-ant-good-key-9876', 'blank key field keeps the saved key');
 });
 
-await step('resume: non-PDF rejected; PDF read via AI fills background + chips; PDF not stored', async () => {
+await step('resume: non-PDF rejected; PDF read via AI fills background + chips; PDF kept on the device', async () => {
   await pop.click('#tabbtn-settings');
   await pop.setInputFiles('#resume-input', { name: 'notes.txt', mimeType: 'text/plain', buffer: Buffer.from('hello') });
   await pop.waitForSelector('#resume-status.err');
@@ -71,11 +71,10 @@ await step('resume: non-PDF rejected; PDF read via AI fills background + chips; 
   await pop.setInputFiles('#resume-input', { name: 'cv.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF-1.4\n1 0 obj<<>>endobj\ntrailer<<>>\n%%EOF') });
   await pop.waitForSelector('#resume-status.ok');
   assert.equal(await pop.inputValue('#s-background'), 'Flipkart, IIT Delhi, Swiggy, React, Pune');
-  assert.match(await pop.textContent('#dropzone-label'), /cv\.pdf/);
+  assert.match(await pop.textContent('#resume-saved-name'), /cv\.pdf/);
   const last = api.requests.at(-1);
   assert.equal(last.messages[0].content[0].type, 'document');
-  const all = JSON.stringify(await storage.get(null));
-  assert.ok(!all.includes('JVBERi0'), 'no PDF bytes in storage');
+  assert.ok((await storage.get('resume')).resume.base64.startsWith('JVBERi0'), 'the PDF is kept, as in the original');
 });
 
 await step('AI draft: request carries hooks + limit; options change does NOT spend a call', async () => {

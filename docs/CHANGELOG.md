@@ -4,8 +4,44 @@ Two rounds of work on the original v3.1.0 extension:
 - **v3.2.0**: fix what was broken, make it honest, make the messages fit LinkedIn, insert into LinkedIn. (Original audit and steps at the bottom.)
 - **v3.3.0**: production-grade structure, follow-up tracking, profile read check, templates, dark mode, tests and CI.
 - **v3.3.1**: tests for every scenario I could identify (178), failure hardening, and 9 bugs found and fixed.
+- **Unreleased**: a real Deep Mode (OpenAI parser + OpenAI web research + writer), the resume PDF kept again, LinkedIn's 2026 profile layout, profile-reading fixes found on live profiles, and a reminder fix (236 tests).
 
 Each step is also a commit: `git log --oneline`.
+
+---
+
+## Unreleased (after v3.3.1) — Deep Mode, resume, live LinkedIn fixes
+
+### Deep Mode, rebuilt for real (Nov 22)
+The original had a "3-Layer AI" Deep Mode that only looked like it did something: it named OpenAI but made no OpenAI call, its company news was always empty, and it waited 0.3 s to look busy. v3.2 removed it. It is back, and this time every layer does what it says:
+- **L1 — OpenAI profile parser.** The profile's own page text plus the page reader's draft go to the OpenAI Responses API with a strict JSON schema. Every value it returns must appear in the page text, otherwise the page reader's value is kept, so it can fix mistakes but can't invent facts.
+- **L2 — OpenAI web research.** OpenAI's hosted `web_search` tool finds up to 3 recent company news items and up to 3 things the person published or presented. Only items whose URL the search actually returned are kept; LinkedIn links are dropped. Results become new "What to mention" hooks (their own work ranks just below common ground) and are listed with their sources.
+- **L3 — Message writer.** The normal writer (the AI writer with your Anthropic key, or the built-in writer) drafts from all of it. Research hooks are phrased as "I saw …" / "I enjoyed …".
+- **Settings:** your own OpenAI key (Test & save, masked, removable) and the model (default `gpt-6.2-sol`; any model with web search works).
+- **Reliable:** L1 failure falls back to the page reader; a rejected key / no credit / unknown model stops before L2 so you aren't charged twice; options a model rejects are retried without them; research keeps running if the popup closes and is restored when it reopens.
+- **Quick mode is unchanged** and never calls OpenAI.
+
+### The resume PDF is kept again
+The original stored the uploaded resume; v3.2 dropped it. It is kept on this device again (with or without a key), can be downloaded or removed, and is still used to fill in your background when you have an Anthropic key. Data from the original version keeps its stored resume. A file that isn't really a PDF is rejected.
+
+
+**Result:** on live profiles checked on 22 Nov 2026 the read check scored 8/8, 7/8 (that profile has no Skills section) and 8/8, in 2–3 s each. 236 tests pass (140 unit, 26 content-script in real Chrome, 70 end-to-end steps); coverage gates unchanged.
+
+### LinkedIn's 2026 profile layout (Nov 20)
+- The name is now an `<h2>`, so it is found by matching the page title when there is no `<h1>`.
+- The page scrolls inside `#workspace`, not the window, so the reader scrolls that container to load the lower sections, then restores your position.
+- About text and posts are read as whole text blocks: the "…more" label is removed and doubled text collapsed. "Top skills" from About is added to Skills.
+
+### Reading fixes found on live profiles (Nov 22)
+- **Jobs and schools are read one entry at a time.** LinkedIn wraps each one in its own container; the old fixed 3-line reading broke on entries with 2 or 4 lines. Several roles at one company are now read as separate roles at that company.
+- **Single-name locations** ("United States") are taken from the line before "Contact info".
+- **Your headline is not a post:** the author line on your own posts is ignored.
+- 3 new content-script tests reproduce these cases from the live page structure.
+
+### Reminders
+- `followups.js` now waits for Chrome to create the notification before marking the contact as notified, so a failed notification no longer suppresses the next reminder.
+
+The manifest version is still 3.3.1; bump it when you package a release.
 
 ---
 
@@ -156,7 +192,7 @@ Purpose, tone and format choices are remembered between uses.
 
 **Your background (Settings)** — new field: companies, schools, skills, city. This powers common-ground matching and is always visible and editable.
 
-**The resume now does something.** With your API key, the PDF is sent once to Claude as a document. It extracts companies, schools, skills, city and a one-line bio, merges them into "Your background", and shows what it found. **The PDF itself is no longer stored.** Without a key it says so plainly and points you to the typed field.
+**The resume now does something.** With your API key, the PDF is sent once to Anthropic's API as a document. It extracts companies, schools, skills, city and a one-line bio, merges them into "Your background", and shows what it found. **The PDF itself is no longer stored.** Without a key it says so plainly and points you to the typed field.
 
 **Header badge** tells the truth: `Built-in writer` (nothing leaves the device) or `AI · your key`. The settings note now says exactly when data is sent to Anthropic.
 

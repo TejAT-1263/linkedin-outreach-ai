@@ -1,13 +1,13 @@
 # Testing
 
-**178 automated tests in four layers**, all run by `npm run check` (≈95 s) and in CI. The full pipeline was run three times back to back with no flaky failures.
+**236 automated tests in four layers**, all run by `npm run check` (≈95 s) and in CI. The full pipeline was run three times back to back with no flaky failures.
 
 | Layer | Command | Runs in | Count | Coverage gate |
 |---|---|---|---|---|
 | Lint | `npm run lint` | Node | ESLint 9, 0 warnings | — |
-| Unit | `npm test` | Node (`node:test`) + Chrome API mock with fault injection | 102 tests | **100% lines**, ≥95% branches/functions on `background/` + `shared/` + `popup/api.js` (currently 96% branches) |
-| Content script | `npm run test:dom` | Real Chrome, LinkedIn-like pages | 21 tests | — |
-| End-to-end | `npm run test:e2e` | Real Chrome + the unpacked extension, LinkedIn routed to mocks, **fake Anthropic API at network level** | 55 steps in 3 suites | **≥90% per popup module** (currently 95–100%) |
+| Unit | `npm test` | Node (`node:test`) + Chrome API mock with fault injection | 140 tests | **100% lines**, ≥95% branches/functions on `background/` + `shared/` + `popup/api.js` (currently 96% branches) |
+| Content script | `npm run test:dom` | Real Chrome, LinkedIn-like pages | 26 tests | — |
+| End-to-end | `npm run test:e2e` | Real Chrome + the unpacked extension, LinkedIn routed to mocks, **fake Anthropic and OpenAI APIs at network level** | 70 steps in 4 suites | **≥90% per popup module** (currently 95–100%) |
 | Fuzz (extra) | `npm run test:fuzz` | Node, seeded PRNG | 5,000 cases/property | — |
 
 Browser coverage comes from one Chrome DevTools profiler session over the extension's JavaScript engine, merged across suites (`scripts/coverage-report.mjs`). Use `node scripts/coverage-gaps.mjs popup/write.js` to list any line the browser never ran.
@@ -19,6 +19,9 @@ Browser coverage comes from one Chrome DevTools profiler session over the extens
 |---|---|
 | Full modern profile: all 8 parts parsed (name, headline, location, about, experience, education, skills, posts) | dom, e2e journey |
 | Older layout (headings, no anchor ids) | dom |
+| 2026 layout: name in `<h2>`, page scrolls inside `#workspace`, sections mount only when scrolled to, "…more" buttons inside text, doubled link-card text | dom |
+| Jobs and schools read one container at a time: uneven entries (2–4 lines), a location without a comma ("Greater Seattle Area"), a school without dates, several roles at one company | dom |
+| A single wrapped job/school is read as one entry, not split into its parts | dom |
 | Non-English profile (German headings) via anchor ids | dom |
 | Duplicated screen-reader text collapsed | dom |
 | UI noise filtered ("Show all 24 skills", endorsements, connections, pronouns) | dom |
@@ -26,6 +29,8 @@ Browser coverage comes from one Chrome DevTools profiler session over the extens
 | No `<h1>` → name from page title | dom |
 | Title/company from headline (`at`, `@`, `\|`, none) | dom |
 | Locations worldwide; job titles not mistaken for places | dom |
+| Single-name locations ("United States") read from the line before "Contact info"; a title there is not taken as a place | dom |
+| The headline repeated as the author line on your own posts is not counted as a post | dom |
 | Script-injection text on page stays inert text | dom |
 | Unicode / RTL / emoji names | dom |
 | URL query/hash stripped; user's scroll position restored | dom |
@@ -67,6 +72,30 @@ Browser coverage comes from one Chrome DevTools profiler session over the extens
 | Tab closed mid-flow → clear error | e2e |
 | Insert/Copy disabled while reading or writing | e2e |
 
+### Deep Mode (L1 OpenAI parser → L2 OpenAI web research → L3 writer)
+| Scenario | Where |
+|---|---|
+| No OpenAI key → Deep Mode asks for it, sends nothing; Quick mode never calls OpenAI | unit, e2e |
+| Full run: L1 → L2 → L3, each layer shows running / done with real detail; sources listed as safe links | unit, e2e |
+| L1 values must appear in the page text: invented jobs, schools, skills and posts are dropped; mistakes such as a place used as a job title are fixed | unit |
+| L2 items must cite a URL the web search returned (or its site); LinkedIn and non-https links dropped; tracking parameters ignored; max 3 per kind | unit |
+| L1 fails → page-reader data used and L2 still runs; L2 fails or returns unreadable text → still drafts | unit, e2e |
+| Rejected key / no credit / unknown model → L2 skipped (no second charge) with a clear reason | unit, e2e |
+| Model rejects `reasoning`, `tool_choice` or `include` → retried once without it; cut-off answer → retried with a bigger budget | unit |
+| Rate limit / 5xx / network → backoff + retry; a slow web search is not repeated after a timeout | unit |
+| Popup closed mid-research → research finishes in the background and is restored on reopen; only one search per profile at a time; interrupted run reported and restartable | unit, e2e |
+| Your own typed detail stays picked after research; AI writer is told research hooks are public-web facts | unit, e2e |
+| Page text for L1: the profile's own sections only (no sidebar), bounded to 15,000 characters | dom |
+| OpenAI key: format check, live test, stored key reused, model saved, never shown back | unit, e2e |
+
+### Resume
+| Scenario | Where |
+|---|---|
+| PDF kept on the device with or without a key (as in the original); exact bytes download back; two-click remove | unit, e2e |
+| Not a real PDF → rejected; over 4 MB → rejected | unit, e2e |
+| With an Anthropic key it also fills in your background; unreadable → PDF still saved, reason shown | unit, e2e |
+| The original version's stored resume is migrated, not deleted | unit |
+
 ### Tracker and follow-ups
 | Scenario | Where |
 |---|---|
@@ -74,7 +103,7 @@ Browser coverage comes from one Chrome DevTools profiler session over the extens
 | Re-drafting after sending never overwrites the sent message | unit |
 | Due dates back off (5 → 7 → 9 days), stop after 3 | unit |
 | Badge count (capped at 99), refreshed whenever the popup opens | unit, e2e |
-| Notifications: single vs summary, once per due cycle, turned off, API missing, blocked → retried later | unit |
+| Notifications: single vs summary, once per due cycle, turned off, API missing, blocked → retried later; a contact is marked notified only after Chrome confirms the notification was created | unit |
 | Notification click → profile / messaging; foreign ids ignored | unit |
 | Stats + "what's working" insight | unit, e2e |
 | 60 contacts: paging, search, every filter | unit, e2e |
@@ -121,10 +150,25 @@ Browser coverage comes from one Chrome DevTools profiler session over the extens
 9. A failed theme save was silent.
 10. *(v3.3)* An empty `{hook}` left a stray space; `SQL` matched `PostgreSQL`; the badge could be an hour stale.
 
+Found on live LinkedIn profiles (Nov 2026), then reproduced in tests and fixed:
+
+11. Jobs were read as fixed 3-line blocks. A job with a comma-less location shifted every later row, so "Greater Seattle Area" became a job title and "Member Board Of Trustees" a past company.
+12. A degree line without dates was read as a second school.
+13. Single-name locations ("United States", "Singapore") were not found.
+14. On your own posts, the author line (your headline) was counted as a recent post.
+15. A follow-up was marked notified before Chrome had created the notification, so a failed notification could suppress the next reminder.
+
+Found while building Deep Mode, then fixed:
+
+16. Two links differing only in their query (`watch?v=1` vs `watch?v=2`) were treated as the same source.
+17. On a short profile the parser's page text fell back to the whole page and picked up the "People you may know" sidebar.
+18. Re-running Deep Mode dropped a detail you had typed yourself.
+
 ## What automated tests cannot prove — check by hand before a demo
 Nothing that depends on LinkedIn's live page or a paid API can be guaranteed by mocks. Do this 5-minute pass:
 1. Load `extension/` unpacked. Open a **real** profile and click **Read**. The pill should say ≥ 5/8. If it shows the layout warning, update `SELECTORS` in `content/content_script.js`.
 2. **Connect → Add a note**, reopen, **Insert**. Text appears; LinkedIn's counter updates.
 3. Open **Message** on a 1st-degree connection and **Insert**. Text appears and **Send** is enabled.
 4. Add your real Anthropic key → **Test & save** → draft. Then upload your real resume.
-5. Tracker: **Mark sent**. Change "Remind me after" to 1 day if you want to see the badge sooner.
+5. Add your real OpenAI key → **Test & save**. Switch to **🔍 Deep**, click **Read + research** on a real profile, and check that each source link opens the right page.
+6. Tracker: **Mark sent**. Change "Remind me after" to 1 day if you want to see the badge sooner.

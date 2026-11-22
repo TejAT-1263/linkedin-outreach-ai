@@ -1,4 +1,4 @@
-// Shared e2e harness: Chrome + unpacked extension, LinkedIn routed to mocks, a fake Anthropic API,
+// Shared e2e harness: Chrome + unpacked extension, LinkedIn routed to mocks, fake Anthropic and OpenAI APIs,
 // popup helpers, a step runner, and V8 coverage of popup scripts.
 import { chromium } from 'playwright';
 import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
@@ -40,6 +40,17 @@ export async function launch({ pages = {} } = {}) {
     if (next.hang) return; // never answer → exercises client timeout
     const body = next.status < 300 ? { content: [{ type: 'text', text: next.text }] } : { error: { message: next.msg || 'error' } };
     await r.fulfill({ status: next.status, contentType: 'application/json', headers: next.headers || {}, body: JSON.stringify(body) });
+  });
+
+  // Fake OpenAI Responses API (Deep Mode): push replies onto `oa.queue` — {status, body, delay} or
+  // {hang:true}; requests land in `oa.requests`. Default reply: a completed "OK".
+  const oa = { queue: [], requests: [] };
+  await ctx.route('https://api.openai.com/**', async r => {
+    oa.requests.push({ body: JSON.parse(r.request().postData() || '{}'), auth: r.request().headers().authorization || '' });
+    const next = oa.queue.shift() || { status: 200, body: { status: 'completed', model: 'gpt-6.2-sol', output: [{ type: 'message', content: [{ type: 'output_text', text: 'OK', annotations: [] }] }] } };
+    if (next.hang) return;
+    if (next.delay) await new Promise(res => setTimeout(res, next.delay));
+    await r.fulfill({ status: next.status, contentType: 'application/json', body: JSON.stringify(next.body) }).catch(() => {});
   });
 
   let [sw] = ctx.serviceWorkers();
@@ -103,7 +114,7 @@ export async function launch({ pages = {} } = {}) {
     saveCoverage(name, coverage);
   }
 
-  return { ctx, sw, extId, api, errors, coverage, tab, popup, storage, saveCoverage: saveCoverageAs };
+  return { ctx, sw, extId, api, oa, errors, coverage, tab, popup, storage, saveCoverage: saveCoverageAs };
 }
 
 /** Step runner that keeps going after a failure and prints a summary. */

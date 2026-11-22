@@ -30,8 +30,9 @@ export async function aiMessage(client, apiKey, { p, me, hooks, messageType, ton
     location: p.location, about: truncate(p.about, 400), recentPosts: p.recentPosts.slice(0, 2)
   };
   const sender = { name: me.name || null, about: me.bio || null };
+  const research = (h) => h.kind === 'news' || h.kind === 'work';
   const hookLines = hooks.length
-    ? hooks.map(h => `- ${h.label}${h.kind?.startsWith('shared') ? ' (common ground)' : ''}`).join('\n')
+    ? hooks.map(h => `- ${h.label}${h.kind?.startsWith('shared') ? ' (common ground)' : ''}${research(h) && typeof h.value === 'string' ? ` — from public web sources; phrase it as "${h.kind === 'news' ? 'I saw' : 'I enjoyed'} ${h.value}"` : ''}`).join('\n')
     : '- (none selected — use the most specific thing in the recipient profile)';
 
   const content =

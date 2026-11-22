@@ -25,12 +25,12 @@ Talking points, not a script. Say it in your own words. Keep a browser tab ready
 - Kept MV3 popup → service worker → content script, but split into modules. Open `docs/ARCHITECTURE.md` and show the diagram.
 - Three things that make it production-grade:
   1. **One storage writer with a lock**. Show the concurrency test (50 parallel updates → exactly 50).
-  2. **Schema migrations**: users of the old version keep their data, and the stored PDF gets deleted.
+  2. **Schema migrations**: users of the old version keep their data, including their stored resume PDF.
   3. **API client** with timeout, backoff and `Retry-After`; **router** that only accepts our own popup and validates every input.
 - **Read check + one `SELECTORS` block**: when LinkedIn changes, you find out and fix it in one place.
-- Run `npm run check` live: 178 tests in about 95 s. Show `docs/TESTING.md`: the scenario matrix, the fake API used to test the real AI path, injected failures, accessibility checks, coverage gates, and **the 9 bugs the tests caught**.
+- Run `npm run check` live: 236 tests in about 2 minutes. Show `docs/TESTING.md`: the scenario matrix, the fake API used to test the real AI path, injected failures, accessibility checks, coverage gates, and **the bugs the tests caught**, including the ones found on live LinkedIn profiles.
 
 ## 5. Scaling + trade-offs (40 s)
 - "It's fully client-side, so it scales per user by construction: no server to overload. I deliberately didn't add a backend because the brief said not to rebuild." Show the scaling section: stateless API behind a gateway, LLM proxy with quotas, Postgres with row-level security, and why the client is already shaped for it (one storage boundary, injectable API client, stable contact ids).
-- Trade-off: removed Deep Mode instead of making it "real" with web search. Honest and useful beat impressive-looking.
+- Trade-off: v3.2 removed the fake Deep Mode, because honest beats impressive-looking. It is now rebuilt for real: OpenAI parses the page (L1) and researches the web (L2), and every fact must be backed by the page text or a cited source before it can reach a draft.
 - Next: test against the live LinkedIn DOM with a small selector-health ping, and an A/B of openers using the reply-rate data.

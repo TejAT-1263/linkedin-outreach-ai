@@ -31,8 +31,9 @@ export function normalizeProfile(raw = {}) {
  * Common ground with the sender scores highest — it's the strongest reason to reply.
  * @param {ReturnType<typeof normalizeProfile>} p
  * @param {{terms?: string[]}} me
+ * @param {object[]} [extra] pre-built hooks, e.g. Deep Mode web research ({kind, label, value, score})
  */
-export function buildHooks(p, me = {}) {
+export function buildHooks(p, me = {}, extra = []) {
   const hooks = [];
   const add = (kind, label, value, score) => hooks.push({ id: `${kind}-${hooks.length}`, kind, label, value, score });
   const mine = me.terms || [];
@@ -62,6 +63,7 @@ export function buildHooks(p, me = {}) {
   if (otherPast) add('pastCompany', `Previously at ${otherPast}`, otherPast, 2);
   if (p.skills.length && !sharedSkills.length) add('skill', `Skilled in ${p.skills.slice(0, 2).join(', ')}`, p.skills.slice(0, 2).join(' and '), 2);
   if (theirSchools.length && !sharedSchool) add('education', `Studied at ${theirSchools[0]}`, theirSchools[0], 1.5);
+  for (const x of extra) add(x.kind, x.label, x.value, x.score);
   if (!hooks.length && p.headline) add('headline', `Headline: ${truncate(p.headline, 80)}`, p.headline, 1);
 
   hooks.sort((a, b) => b.score - a.score);

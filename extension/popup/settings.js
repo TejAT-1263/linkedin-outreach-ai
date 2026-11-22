@@ -1,7 +1,7 @@
 // popup/settings.js — Settings tab.
 import { call, ACTIONS } from './api.js';
-import { $, h, show, setStatus, setSegmented, wireSegmentedKeys, toast } from './dom.js';
-import { LIMITS } from '../shared/constants.js';
+import { $, h, show, setStatus, setSegmented, wireSegmentedKeys, toast, downloadBase64 } from './dom.js';
+import { LIMITS, OPENAI } from '../shared/constants.js';
 import { exportCsv } from './tracker.js';
 
 let app;
@@ -17,6 +17,13 @@ export function init(appCtx) {
   $('test-key-btn').addEventListener('click', testKey);
   $('s-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); testKey(); } });
   $('remove-key-btn').addEventListener('click', removeKey);
+  $('test-openai-btn').addEventListener('click', testOpenAIKey);
+  $('s-openai-key').addEventListener('keydown', (e) => { if (e.key === 'Enter') { e.preventDefault(); testOpenAIKey(); } });
+  $('remove-openai-btn').addEventListener('click', removeOpenAIKey);
+  $('openai-models').replaceChildren(...OPENAI.SUGGESTED_MODELS.map(m => h('option', { value: m })));
+  $('openai-default-model').textContent = OPENAI.DEFAULT_MODEL;
+  $('resume-download-btn').addEventListener('click', downloadResume);
+  $('resume-remove-btn').addEventListener('click', removeResume);
   $('s-theme').addEventListener('click', (e) => {
     const b = e.target.closest('.seg'); if (!b) return;
     theme = b.dataset.theme;
@@ -55,8 +62,20 @@ function fill(s) {
   show('remove-key-btn', s.hasKey);
   theme = s.theme || 'system';
   setSegmented('s-theme', 'theme', theme);
-  if (s.resumeFileName) { $('dropzone-label').textContent = `✓ ${s.resumeFileName} — drop another to update`; $('dropzone').classList.add('done'); }
+  $('s-openai-key').value = '';
+  $('s-openai-key').placeholder = s.hasOpenAIKey ? 'Key saved — paste a new one to replace' : 'sk-proj-…';
+  $('s-openai-model').value = s.openaiModel || OPENAI.DEFAULT_MODEL;
+  $('openai-key-hint').textContent = s.hasOpenAIKey ? `Saved key: ${s.openaiKeyHint}` : 'No key — Deep Mode is off.';
+  show('remove-openai-btn', s.hasOpenAIKey);
+  const hasResume = !!s.resumeFileName;
+  $('dropzone-label').textContent = hasResume ? 'Drop another PDF to replace it' : 'Click or drop a PDF';
+  $('dropzone').classList.toggle('done', hasResume);
+  $('resume-saved-name').textContent = hasResume ? `✓ ${s.resumeFileName}${s.resumeBytes ? ` · ${kb(s.resumeBytes)}` : ''}` : '';
+  show('resume-saved', hasResume);
 }
+
+const kb = (bytes) => (bytes >= 1024 * 1024 ? `${(bytes / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(bytes / 1024))} KB`);
+const MODEL_RE = /^[a-z0-9][a-z0-9._:-]{1,63}$/i;
 
 async function save() {
   const days = Number($('s-days').value);
@@ -70,11 +89,23 @@ async function save() {
     setStatus('settings-status', 'That doesn’t look like an Anthropic key (they start with “sk-ant-”). Use “Test & save” to check it.', 'error');
     return;
   }
+  const okey = $('s-openai-key').value.trim();
+  if (okey && (/^sk-ant-/.test(okey) || !/^sk-[\w-]{16,}$/.test(okey))) {
+    setStatus('settings-status', 'That doesn’t look like an OpenAI key (they start with “sk-”, often “sk-proj-”). Use “Test & save” to check it.', 'error');
+    return;
+  }
+  const model = $('s-openai-model').value.trim() || OPENAI.DEFAULT_MODEL;
+  if (!MODEL_RE.test(model)) {
+    setStatus('settings-status', 'That model name doesn’t look right — use an OpenAI model id such as gpt-6.2-sol.', 'error');
+    $('s-openai-model').focus();
+    return;
+  }
   try {
     const { settings } = await call(ACTIONS.SAVE_SETTINGS, {
       name: $('s-name').value, bio: $('s-bio').value, background: $('s-background').value,
-      followUpDays: days, notifications: $('s-notify').checked, theme,
-      ...(key ? { apiKey: key } : {})
+      followUpDays: days, notifications: $('s-notify').checked, theme, openaiModel: model,
+      ...(key ? { apiKey: key } : {}),
+      ...(okey ? { openaiKey: okey } : {})
     });
     applySettings(settings);
     setStatus('settings-status', 'Saved.', 'success');
@@ -106,6 +137,62 @@ async function testKey() {
   }
 }
 
+async function testOpenAIKey() {
+  const btn = $('test-openai-btn');
+  const note = $('openai-status-note');
+  const model = $('s-openai-model').value.trim() || OPENAI.DEFAULT_MODEL;
+  if (!MODEL_RE.test(model)) { note.textContent = '✗ That model name doesn’t look right — e.g. gpt-6.2-sol.'; note.className = 'note err'; return; }
+  btn.disabled = true; btn.textContent = 'Testing…';
+  try {
+    const res = await call(ACTIONS.TEST_OPENAI_KEY, { apiKey: $('s-openai-key').value.trim(), model });
+    note.textContent = res.valid ? `✓ Key works with ${model} — Deep Mode is on.` : `✗ ${res.reason}`;
+    note.className = `note ${res.valid ? 'ok' : 'err'}`;
+    if (res.valid) applySettings(res.settings);
+  } catch (err) {
+    note.textContent = `✗ ${err.message}`; note.className = 'note err';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Test & save';
+  }
+}
+
+async function removeOpenAIKey() {
+  const { settings } = await call(ACTIONS.SAVE_SETTINGS, { clearOpenAIKey: true });
+  applySettings(settings);
+  $('openai-status-note').className = 'note hidden';
+  toast('OpenAI key removed. Deep Mode is off.');
+}
+
+async function downloadResume() {
+  try {
+    const { resume } = await call(ACTIONS.GET_RESUME);
+    if (!resume) { toast('No resume saved.', 'error'); return; }
+    downloadBase64(resume.fileName, resume.base64, 'application/pdf');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
+let removeResumeArmed = false;
+async function removeResume() {
+  const btn = $('resume-remove-btn');
+  if (!removeResumeArmed) {
+    removeResumeArmed = true;
+    btn.textContent = 'Click again to remove';
+    setTimeout(() => { removeResumeArmed = false; btn.textContent = 'Remove'; }, 3500);
+    return;
+  }
+  removeResumeArmed = false;
+  btn.textContent = 'Remove';
+  try {
+    const { settings } = await call(ACTIONS.DELETE_RESUME);
+    applySettings(settings);
+    $('resume-status').className = 'note hidden';
+    toast('Resume removed from this device.');
+  } catch (err) {
+    toast(err.message, 'error');
+  }
+}
+
 async function removeKey() {
   const { settings } = await call(ACTIONS.SAVE_SETTINGS, { clearKey: true });
   applySettings(settings);
@@ -118,8 +205,7 @@ async function resume(file) {
   const say = (msg, cls) => { status.textContent = msg; status.className = `note ${cls}`; };
   if (file.type !== 'application/pdf' && !/\.pdf$/i.test(file.name)) return say('Please choose a PDF.', 'err');
   if (file.size > LIMITS.MAX_RESUME_BYTES) return say('That file is over 4 MB.', 'err');
-  if (!app.state.settings.hasKey) return say('Add and test your API key below first — or just type your background above.', 'err');
-  say('Reading your resume…', 'pending');
+  say(app.state.settings.hasKey ? 'Saving and reading your resume…' : 'Saving your resume…', 'pending');
   try {
     const base64 = await new Promise((resolve, reject) => {
       const r = new FileReader();
@@ -127,9 +213,11 @@ async function resume(file) {
       r.onerror = () => reject(new Error('Could not read that file.'));
       r.readAsDataURL(file);
     });
-    const { facts, settings } = await call(ACTIONS.PARSE_RESUME, { base64, fileName: file.name });
+    const { facts, parseError, settings } = await call(ACTIONS.PARSE_RESUME, { base64, fileName: file.name });
     applySettings(settings);
-    say(`Added ${facts.companies.length} companies, ${facts.schools.length} schools and ${facts.skills.length} skills to your background. Edit them above anytime. (The PDF itself isn't stored.)`, 'ok');
+    if (facts) say(`Saved, and added ${facts.companies.length} companies, ${facts.schools.length} schools and ${facts.skills.length} skills to your background. Edit them above anytime.`, 'ok');
+    else if (parseError) say(`Saved. Couldn't fill in your background from it: ${parseError}`, 'pending');
+    else say('Saved on this device. Add your Anthropic key below to fill in your background from it automatically.', 'ok');
   } catch (err) {
     say(err.message, 'err');
   }

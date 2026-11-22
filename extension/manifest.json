@@ -4,8 +4,8 @@
   "version": "3.3.1",
   "description": "Write short, specific LinkedIn notes from the profile you're viewing, insert them into LinkedIn, and never forget a follow-up.",
   "minimum_chrome_version": "116",
-  "permissions": ["activeTab", "storage", "tabs", "scripting", "alarms", "notifications"],
-  "host_permissions": ["https://www.linkedin.com/*", "https://api.anthropic.com/*"],
+  "permissions": ["activeTab", "storage", "unlimitedStorage", "tabs", "scripting", "alarms", "notifications"],
+  "host_permissions": ["https://www.linkedin.com/*", "https://api.anthropic.com/*", "https://api.openai.com/*"],
   "background": {
     "service_worker": "background/index.js",
     "type": "module"

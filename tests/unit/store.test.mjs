@@ -45,9 +45,11 @@ test('corrupted settings / prefs / templates fall back to safe defaults', async 
   assert.equal(s.theme, 'system');
   assert.equal(s.notifications, true);
   assert.equal(s.apiKey, '12');
-  assert.deepEqual(await store.getPrefs(), { messageType: 'Networking', tone: 'Neutral', format: 'note' });
-  local._replace({ ...local._raw(), prefs: { messageType: 'Job', tone: 'Shouty', format: 'dm' } });
-  assert.deepEqual(await store.getPrefs(), { messageType: 'Job', tone: 'Neutral', format: 'dm' });
+  assert.deepEqual(await store.getPrefs(), { messageType: 'Networking', tone: 'Neutral', format: 'note', mode: 'quick' });
+  local._replace({ ...local._raw(), prefs: { messageType: 'Job', tone: 'Shouty', format: 'dm', mode: 'turbo' } });
+  assert.deepEqual(await store.getPrefs(), { messageType: 'Job', tone: 'Neutral', format: 'dm', mode: 'quick' });
+  local._replace({ ...local._raw(), prefs: { mode: 'deep' } });
+  assert.equal((await store.getPrefs()).mode, 'deep');
   const t = await store.listTemplates();
   assert.equal(t.length, 1);
   assert.equal(t[0].uses, 0);

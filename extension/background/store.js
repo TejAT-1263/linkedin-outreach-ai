@@ -1,7 +1,7 @@
 // background/store.js — the only module that touches chrome.storage.
 // All writes go through a single promise queue, so concurrent read-modify-write
 // operations (popup actions, alarms) can never overwrite each other.
-import { LIMITS, THEMES, PURPOSES, TONES, FORMATS, STATUS } from '../shared/constants.js';
+import { LIMITS, THEMES, PURPOSES, TONES, FORMATS, STATUS, MODES, OPENAI } from '../shared/constants.js';
 import { clean } from '../shared/text.js';
 import { UserError } from '../shared/errors.js';
 import { migrate, defaultSettings, defaultPrefs } from './migrate.js';
@@ -83,7 +83,11 @@ export function sanitizeSettings(patch = {}) {
   if ('bio' in patch) out.bio = clean(text(patch.bio)).slice(0, 160);
   if ('background' in patch) out.background = text(patch.background).slice(0, 1000);
   if ('apiKey' in patch) out.apiKey = text(patch.apiKey).trim().slice(0, 300);
+  if ('openaiKey' in patch) out.openaiKey = text(patch.openaiKey).trim().slice(0, 300);
+  if ('openaiModel' in patch) out.openaiModel = validModel(patch.openaiModel);
   if ('resumeFileName' in patch) out.resumeFileName = clean(text(patch.resumeFileName)).slice(0, 120);
+  if ('resumeBytes' in patch) out.resumeBytes = Number.isInteger(patch.resumeBytes) && patch.resumeBytes > 0 ? patch.resumeBytes : 0;
+  if ('resumeSavedAt' in patch) out.resumeSavedAt = Number.isFinite(patch.resumeSavedAt) ? patch.resumeSavedAt : 0;
   if ('followUpDays' in patch) {
     const d = Math.round(Number(patch.followUpDays));
     out.followUpDays = Number.isFinite(d) ? Math.min(LIMITS.MAX_FOLLOWUP_DAYS, Math.max(LIMITS.MIN_FOLLOWUP_DAYS, d)) : LIMITS.DEFAULT_FOLLOWUP_DAYS;
@@ -101,10 +105,22 @@ export async function saveSettings(patch) {
   });
 }
 
-/** Public view of settings: never send the raw API key back to the UI. */
+/** OpenAI model ids look like "gpt-6.2-sol"; anything else falls back to the default. */
+export function validModel(m) {
+  const v = typeof m === 'string' ? m.trim() : '';
+  return /^[a-z0-9][a-z0-9._:-]{1,63}$/i.test(v) ? v : OPENAI.DEFAULT_MODEL;
+}
+
+const hint = (k) => (k ? `${k.slice(0, 7)}…${k.slice(-4)}` : '');
+
+/** Public view of settings: never send the raw API keys back to the UI. */
 export function publicSettings(s) {
-  const { apiKey, ...rest } = s;
-  return { ...rest, hasKey: !!apiKey, keyHint: apiKey ? `${apiKey.slice(0, 7)}…${apiKey.slice(-4)}` : '' };
+  const { apiKey, openaiKey, ...rest } = s;
+  return {
+    ...rest,
+    hasKey: !!apiKey, keyHint: hint(apiKey),
+    hasOpenAIKey: !!openaiKey, openaiKeyHint: hint(openaiKey)
+  };
 }
 
 // ─── Prefs ────────────────────────────────────────────────────────────────────
@@ -115,7 +131,8 @@ export async function getPrefs() {
   return {
     messageType: PURPOSES.includes(p.messageType) ? p.messageType : d.messageType,
     tone: TONES.includes(p.tone) ? p.tone : d.tone,
-    format: FORMATS[p.format] ? p.format : d.format
+    format: FORMATS[p.format] ? p.format : d.format,
+    mode: MODES.includes(p.mode) ? p.mode : d.mode
   };
 }
 
@@ -125,6 +142,7 @@ export async function savePrefs(patch = {}) {
     if (PURPOSES.includes(patch.messageType)) prefs.messageType = patch.messageType;
     if (TONES.includes(patch.tone)) prefs.tone = patch.tone;
     if (FORMATS[patch.format]) prefs.format = patch.format;
+    if (MODES.includes(patch.mode)) prefs.mode = patch.mode;
     await save({ prefs });
     return prefs;
   });
@@ -214,6 +232,47 @@ export async function getSession(url) {
   if (!isObj(draft) || draft.url !== url || !Number.isFinite(draft.savedAt)) return null;
   if (Date.now() - draft.savedAt > LIMITS.SESSION_TTL_MS) return null;
   return draft;
+}
+
+// ─── Deep Mode results (session: cleared when the browser closes) ─────────────
+const MAX_DEEP = 20;
+
+export async function getDeep(id) {
+  const { deep } = await session().get('deep');
+  const e = isObj(deep) ? deep[id] : null;
+  if (!isObj(e) || !Number.isFinite(e.at) || Date.now() - e.at > LIMITS.DEEP_CACHE_TTL_MS) return null;
+  return e;
+}
+
+/** Merge `patch` into the entry for `id`; keeps the most recent MAX_DEEP profiles. */
+export async function saveDeep(id, patch) {
+  return withLock(async () => {
+    const { deep } = await session().get('deep');
+    const all = isObj(deep) ? deep : {};
+    all[id] = { ...(isObj(all[id]) ? all[id] : {}), ...patch, at: Date.now() };
+    const keep = Object.entries(all).sort((a, b) => (b[1]?.at || 0) - (a[1]?.at || 0)).slice(0, MAX_DEEP);
+    await save({ deep: Object.fromEntries(keep) }, session());
+    return all[id];
+  });
+}
+
+// ─── Resume (the PDF itself, kept on this device) ─────────────────────────────
+export async function getResume() {
+  const { resume } = await local().get('resume');
+  if (!isObj(resume) || typeof resume.base64 !== 'string' || !resume.base64) return null;
+  return { base64: resume.base64, fileName: s(resume.fileName, 120) || 'resume.pdf', bytes: Number(resume.bytes) || 0, savedAt: n(resume.savedAt) ?? 0 };
+}
+
+export async function saveResume({ base64, fileName, bytes }) {
+  return withLock(async () => {
+    const resume = { base64, fileName: s(fileName, 120) || 'resume.pdf', bytes, savedAt: Date.now() };
+    await save({ resume });
+    return resume;
+  });
+}
+
+export async function deleteResume() {
+  return withLock(() => local().remove('resume'));
 }
 
 // ─── Reset ────────────────────────────────────────────────────────────────────

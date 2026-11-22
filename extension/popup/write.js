@@ -1,7 +1,7 @@
 // popup/write.js — the Write tab: read profile → pick hooks → draft → insert / copy.
 import { call, ACTIONS } from './api.js';
 import { $, h, show, setStatus, setSegmented, wireSegmentedKeys, copyText, toast, relativeTime } from './dom.js';
-import { FORMATS, LIMITS, STATUS } from '../shared/constants.js';
+import { FORMATS, LIMITS, STATUS, MODES } from '../shared/constants.js';
 import { openerFor } from '../background/writer-local.js';
 
 const WRITER = '__writer__';
@@ -9,7 +9,7 @@ const WRITER = '__writer__';
 const st = {
   tabId: null, tabUrl: '', onProfile: false,
   profile: null, hooks: [], diagnostics: null, contact: null,
-  variant: 0, source: WRITER, format: 'note',
+  variant: 0, source: WRITER, format: 'note', mode: 'quick',
   busy: false, confirmReplace: false
 };
 let app;
@@ -27,6 +27,7 @@ export async function init(appCtx) {
 export function onSettingsChanged() {
   renderSourceOptions();
   updateSetupTip();
+  renderDeepGate();
 }
 
 // ─── Setup ────────────────────────────────────────────────────────────────────
@@ -44,6 +45,14 @@ function wire() {
   wireSegmentedKeys('format');
   ['message-type', 'tone'].forEach(id => $(id).addEventListener('change', () => { savePrefs(); optionsChanged(); }));
   $('source-select').addEventListener('change', () => { st.source = $('source-select').value; generate({ regenerate: false }); });
+
+  $('mode').addEventListener('click', (e) => {
+    const b = e.target.closest('.seg'); if (!b || st.busy) return;
+    setMode(b.dataset.mode); savePrefs();
+  });
+  wireSegmentedKeys('mode');
+  $('enrich-btn').addEventListener('click', deepRun);
+  $('deep-gen-btn').addEventListener('click', () => generate({ regenerate: false }));
 
   $('custom-hook-form').addEventListener('submit', (e) => { e.preventDefault(); addCustomHook(); });
   $('read-pill').addEventListener('click', () => show('read-detail', $('read-detail').classList.contains('hidden')));
@@ -69,12 +78,23 @@ async function detectTab() {
   st.onProfile = /^https:\/\/www\.linkedin\.com\/in\/[^/]+/.test(st.tabUrl);
   $('read-btn').disabled = !st.onProfile;
   show('page-warning', !st.onProfile);
+  renderDeepGate();
 }
 
 function applyPrefs(prefs) {
   $('message-type').value = prefs.messageType;
   $('tone').value = prefs.tone;
   setFormat(prefs.format);
+  setMode(prefs.mode);
+}
+
+function setMode(m) {
+  st.mode = MODES.includes(m) ? m : 'quick';
+  setSegmented('mode', 'mode', st.mode);
+  const deep = st.mode === 'deep';
+  show('read-btn', !deep);
+  show('deep-panel', deep);
+  renderDeepGate();
 }
 
 function setFormat(f) {
@@ -85,7 +105,7 @@ function setFormat(f) {
 
 function savePrefs() {
   // Best-effort: remembering last-used options must never interrupt writing.
-  call(ACTIONS.SAVE_PREFS, { messageType: $('message-type').value, tone: $('tone').value, format: st.format }).catch(() => {});
+  call(ACTIONS.SAVE_PREFS, { messageType: $('message-type').value, tone: $('tone').value, format: st.format, mode: st.mode }).catch(() => {});
 }
 
 function updateSetupTip() {
@@ -126,6 +146,8 @@ async function generate({ regenerate }) {
   if (!st.profile || st.busy) return;
   if (regenerate) st.variant += 1;
   setBusy(true, 'regen');
+  const deep = st.mode === 'deep';
+  if (deep) setLayer('l3', 'running', l3Desc());
   try {
     const common = { profile: st.profile, hooks: st.hooks, format: st.format, variant: st.variant };
     const res = st.source === WRITER
@@ -137,11 +159,124 @@ async function generate({ regenerate }) {
     st.contact = res.contact || st.contact;
     renderDraft(res.message, res.source);
     setStatus('status', '');
+    if (deep) setLayer('l3', 'done', `Draft ready · ${l3Desc()}`);
     persist();
   } catch (err) {
+    if (deep) setLayer('l3', 'failed', err.message);
     setStatus('status', err.message, 'error');
   } finally {
     setBusy(false, 'regen');
+  }
+}
+
+// ─── Deep Mode (L1 parser → L2 web research → L3 writer) ──────────────────────
+const STATE_TEXT = { ready: 'Ready', waiting: 'Waiting', running: 'Running…', done: 'Done', failed: 'Failed', skipped: 'Skipped' };
+const DEFAULT_DESC = {
+  l1: 'Turns the page into clean data, checked against the page',
+  l2: 'Company news and their public work, with sources',
+  l3: 'Writes from everything found'
+};
+
+function setLayer(layer, state, desc) {
+  $(`layer-${layer}`).dataset.state = state;
+  $(`${layer}-state`).textContent = STATE_TEXT[state];
+  $(`${layer}-desc`).textContent = desc || DEFAULT_DESC[layer];
+}
+
+function l3Desc() {
+  if (st.source !== WRITER) return 'Your template';
+  return app.state.settings.hasKey ? 'AI writer, with your Anthropic key' : 'Built-in writer';
+}
+
+const secs = (ms) => `${Math.max(1, Math.round((ms || 0) / 1000))} s`;
+
+function l1Text(l1) {
+  if (l1.status === 'done') return `Checked against the page${l1.filled?.length ? ` · improved ${l1.filled.join(', ')}` : ''} · ${secs(l1.ms)}`;
+  return `Used the page reader instead — ${l1.note}`;
+}
+
+function l2Text(l2) {
+  if (l2.status === 'running') return 'Searching the web… this can take up to a minute.';
+  if (l2.status === 'done') {
+    const parts = [l2.news ? `${l2.news} news item${l2.news > 1 ? 's' : ''}` : '', l2.work ? `${l2.work} piece${l2.work > 1 ? 's' : ''} of their own work` : ''].filter(Boolean);
+    return parts.length ? `Found ${parts.join(' and ')} · ${secs(l2.ms)}` : `Nothing reliable found — drafting from the profile · ${secs(l2.ms)}`;
+  }
+  return l2.note;
+}
+
+function renderDeepGate() {
+  const deep = st.mode === 'deep';
+  const hasKey = !!app.state.settings.hasOpenAIKey;
+  show('deep-needs-key', deep && !hasKey);
+  $('deep-model').textContent = hasKey ? app.state.settings.openaiModel : '';
+  $('enrich-btn').disabled = st.busy || !st.onProfile || !hasKey;
+  $('deep-gen-btn').disabled = st.busy || !st.profile;
+}
+
+function renderSources(research) {
+  const items = research ? [...(research.publicWork || []), ...(research.companyNews || [])] : [];
+  $('source-list').replaceChildren(...items.map(it => {
+    let host = '';
+    try { host = new URL(it.url).hostname.replace(/^www\./, ''); } catch { /* validated in the background */ }
+    return h('li', {},
+      h('a', { href: it.url, target: '_blank', rel: 'noopener noreferrer', title: it.summary || it.title }, it.title),
+      h('span', { class: 'muted' }, ` · ${[host, it.date].filter(Boolean).join(' · ')}`));
+  }));
+  show('deep-sources', items.length > 0);
+}
+
+/** Research hooks replace the profile-only ones; anything you typed yourself is kept. */
+function adoptHooks(hooks) {
+  const custom = st.hooks.filter(x => x.kind === 'custom');
+  st.hooks = [...custom, ...hooks.map(x => (custom.some(c => c.selected) ? { ...x, selected: false } : x))];
+  if (custom.some(c => c.selected)) {
+    const best = st.hooks.find(x => x.kind !== 'custom');
+    if (best && st.hooks.filter(x => x.selected).length < LIMITS.MAX_HOOKS) best.selected = true;
+  }
+}
+
+async function deepRun() {
+  if (st.busy || !st.onProfile) return;
+  setBusy(true, 'deep');
+  setStatus('status', '');
+  setLayer('l1', 'running', 'Reading the page and checking it with OpenAI…');
+  setLayer('l2', 'waiting'); setLayer('l3', 'waiting');
+  renderSources(null);
+  show('profile-card', false); show('profile-skeleton');
+  let ready = false;
+  try {
+    const res = await call(ACTIONS.DEEP_PARSE, { tabId: st.tabId });
+    // Details you typed yourself are kept when it's the same person.
+    if (st.profile?.profileUrl !== res.profile.profileUrl) st.hooks = [];
+    Object.assign(st, { profile: res.profile, diagnostics: res.diagnostics, contact: res.contact, variant: 0 });
+    adoptHooks(res.hooks);
+    show('profile-skeleton', false);
+    renderProfile(); renderHooks(); renderContactBanner();
+    setLayer('l1', res.l1.status, l1Text(res.l1));
+    setLayer('l2', res.l2.status, l2Text(res.l2));
+    if (res.l2.status === 'running') await finishResearch();
+    ready = true;
+  } catch (err) {
+    setLayer('l1', 'failed', err.message);
+    setLayer('l2', 'ready'); setLayer('l3', 'ready');
+    setStatus('status', err.message, 'error');
+  } finally {
+    show('profile-skeleton', false);
+    if (st.profile) show('profile-card');
+    setBusy(false, 'deep');
+  }
+  if (ready) await generate({ regenerate: false });
+}
+
+async function finishResearch() {
+  try {
+    const res = await call(ACTIONS.DEEP_ENRICH, { profileUrl: st.profile.profileUrl });
+    adoptHooks(res.hooks);
+    renderHooks();
+    setLayer('l2', res.l2.status, l2Text(res.l2));
+    renderSources(res.research);
+  } catch (err) {
+    setLayer('l2', 'failed', err.message);
   }
 }
 
@@ -348,7 +483,12 @@ function setBusy(on, which) {
   st.busy = on;
   // While anything is working, nothing that depends on the draft can be clicked.
   for (const id of ['insert-btn', 'copy-btn', 'regen-btn']) $(id).disabled = on;
-  if (which === 'read') {
+  renderDeepGate();
+  if (which === 'deep') {
+    $('enrich-btn').setAttribute('aria-busy', String(on));
+    $('enrich-label').textContent = on ? 'Working…' : (st.profile ? 'Re-run L1 + L2' : 'Read + research (L1 + L2)');
+    show('enrich-spinner', on);
+  } else if (which === 'read') {
     $('read-btn').disabled = on || !st.onProfile;
     $('read-btn').setAttribute('aria-busy', String(on));
     if (on) $('read-label').textContent = 'Reading profile…';
@@ -357,6 +497,24 @@ function setBusy(on, which) {
   } else {
     $('regen-btn').setAttribute('aria-busy', String(on));
     show('regen-spinner', on);
+    show('deep-gen-spinner', on && st.mode === 'deep');
+  }
+}
+
+/** Reopened popup: show the layers as they were, and pick up research that finished meanwhile. */
+async function restoreDeep(hasDraft) {
+  const { deep } = await call(ACTIONS.DEEP_STATUS, { url: st.profile.profileUrl }).catch(() => ({ deep: null }));
+  if (!deep) return;
+  if (deep.l1) setLayer('l1', deep.l1.status, l1Text(deep.l1));
+  if (hasDraft) setLayer('l3', 'done', `Draft ready · ${l3Desc()}`);
+  if (!deep.l2) return;
+  setLayer('l2', deep.l2.status, l2Text(deep.l2));
+  renderSources(deep.research);
+  const researchedHooks = st.hooks.some(x => x.kind === 'news' || x.kind === 'work');
+  if (deep.l2.status === 'running' || (deep.l2.status === 'done' && !researchedHooks && deep.research && (deep.research.companyNews.length || deep.research.publicWork.length))) {
+    setBusy(true, 'deep');
+    try { await finishResearch(); } finally { setBusy(false, 'deep'); }
+    persist();
   }
 }
 
@@ -383,6 +541,8 @@ async function restoreSession() {
   renderSourceOptions();
   renderProfile(); renderHooks();
   if (session.message) renderDraft(session.message, session.source);
+  renderDeepGate();
+  if (st.mode === 'deep') await restoreDeep(!!session.message);
   // The tracker may know this person; refresh the banner quietly.
   const { items } = await call(ACTIONS.LIST_CONTACTS, { query: st.profile.name, limit: 5 }).catch(() => ({ items: [] }));
   st.contact = items.find(c => c.profileUrl && st.profile.profileUrl && c.profileUrl === st.profile.profileUrl) || null;

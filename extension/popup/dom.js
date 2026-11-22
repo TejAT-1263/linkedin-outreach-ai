@@ -79,11 +79,23 @@ export async function copyText(text, fallbackEl) {
   }
 }
 
-export function download(filename, text, mime = 'text/csv') {
-  const url = URL.createObjectURL(new Blob([text], { type: `${mime};charset=utf-8` }));
+/** Save a base64 file (e.g. the stored resume PDF). */
+export function downloadBase64(filename, base64, mime) {
+  const bin = atob(base64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  saveBlob(filename, new Blob([bytes], { type: mime }));
+}
+
+function saveBlob(filename, blob) {
+  const url = URL.createObjectURL(blob);
   const a = h('a', { href: url, download: filename });
   document.body.append(a);
   a.click();
   a.remove();
   setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+
+export function download(filename, text, mime = 'text/csv') {
+  saveBlob(filename, new Blob([text], { type: `${mime};charset=utf-8` }));
 }

@@ -1,5 +1,5 @@
 // background/router.js — every popup request lands here. Validates, dispatches, shapes errors.
-import { ACTIONS, FORMATS, PURPOSES, TONES, STATUS, LIMITS, DEFAULT_FORMAT } from '../shared/constants.js';
+import { ACTIONS, FORMATS, PURPOSES, TONES, STATUS, LIMITS, DEFAULT_FORMAT, OPENAI } from '../shared/constants.js';
 import { splitList, uniq, contactIdFromUrl, canonicalProfileUrl, clean } from '../shared/text.js';
 import { normalizeProfile, buildHooks, sanitizeHooks } from './hooks.js';
 import { localMessage, localFollowUp, openerFor } from './writer-local.js';
@@ -7,12 +7,17 @@ import { aiMessage, aiFollowUp, aiResumeFacts } from './writer-ai.js';
 import { templatize, applyTemplate, validateTemplate } from './templates.js';
 import { computeStats, isDue, followUpDueAt, toCsv } from './tracker.js';
 import { createClient, ApiError } from './anthropic.js';
+import { createOpenAIClient } from './openai.js';
+import { parseProfile, researchProfile, researchHooks, diagnosticsFor, keepAlive, FATAL_CODES } from './deep.js';
 import { UserError } from '../shared/errors.js';
 import * as linkedin from './linkedin.js';
 import * as store from './store.js';
 import * as followups from './followups.js';
 
 const client = createClient();
+const openai = createOpenAIClient();
+/** Deep Mode web research in flight, by contact id — survives the popup closing. */
+const deepRuns = new Map();
 
 // ─── Input guards ─────────────────────────────────────────────────────────────
 const oneOf = (v, list, dflt) => (list.includes(v) ? v : dflt);
@@ -51,6 +56,36 @@ async function trackDraft({ profile, message, purpose, format, hooks, fromTempla
       history: prev ? base.history : pushHistory(base, 'drafted')
     };
   });
+}
+
+const safeMessage = (err) => (err instanceof UserError || err instanceof ApiError ? err.message : 'Something went wrong. Please try again.');
+
+async function openaiSettings() {
+  const s = await store.getSettings();
+  if (!s.openaiKey) throw new UserError('Add your OpenAI key in Settings to use Deep Mode.', 'no_openai_key');
+  return s;
+}
+
+/** Start L2 for a profile (once per profile at a time). Never rejects. */
+function startResearch(id, profile, s) {
+  if (deepRuns.has(id)) return deepRuns.get(id);
+  const run = (async () => {
+    const t0 = Date.now();
+    let l2;
+    let research = null;
+    try {
+      research = await keepAlive(researchProfile(openai, s.openaiKey, s.openaiModel, profile));
+      l2 = { status: 'done', news: research.companyNews.length, work: research.publicWork.length, ms: Date.now() - t0 };
+    } catch (err) {
+      if (!(err instanceof ApiError || err instanceof UserError)) console.error('[outreach] deep research failed', err);
+      l2 = { status: 'failed', note: safeMessage(err), ms: Date.now() - t0 };
+    }
+    try { await store.saveDeep(id, { l2, research }); } catch { /* the result is still returned below */ }
+    return { l2, research };
+  })();
+  deepRuns.set(id, run);
+  run.finally(() => deepRuns.delete(id));
+  return run;
 }
 
 function contactView(c, followUpDays, now = Date.now()) {
@@ -92,6 +127,91 @@ const handlers = {
       diagnostics: raw.diagnostics || null,
       contact: contactView(existing, me.followUpDays)
     };
+  },
+
+  // ─── Deep Mode ───────────────────────────────────────────────────────────────
+  /** L1: read the page, then let OpenAI clean it up. Kicks off L2 right away. */
+  async [ACTIONS.DEEP_PARSE]({ tabId }) {
+    const s = await openaiSettings();
+    const raw = await linkedin.scrape(int(tabId));
+    const scraped = normalizeProfile(raw);
+    if (!scraped.name) throw new UserError("Couldn't find a name on this page. Is it a profile page?");
+    scraped.profileUrl = canonicalProfileUrl(scraped.profileUrl) || scraped.profileUrl;
+    const id = contactIdFromUrl(scraped.profileUrl);
+    if (!id) throw new UserError('Open someone’s profile (linkedin.com/in/…) first.', 'not_profile');
+
+    const t0 = Date.now();
+    let profile = scraped;
+    let l1;
+    try {
+      const parsed = await keepAlive(parseProfile(openai, s.openaiKey, s.openaiModel, { scraped, rawText: text(raw.rawText, LIMITS.MAX_RAW_PROFILE_TEXT) }));
+      profile = parsed.profile;
+      l1 = { status: 'done', model: parsed.model, filled: parsed.filled, ms: Date.now() - t0 };
+    } catch (err) {
+      if (!(err instanceof ApiError || err instanceof UserError)) console.error('[outreach] deep parse failed', err);
+      l1 = { status: 'failed', note: safeMessage(err), code: err?.code || null, ms: Date.now() - t0 };
+    }
+
+    // A rejected key, empty account or unknown model would fail L2 the same way: don't spend the call.
+    const fatal = l1.status === 'failed' && FATAL_CODES.includes(l1.code);
+    const l2 = fatal ? { status: 'skipped', note: l1.note } : { status: 'running' };
+    await store.saveDeep(id, { url: profile.profileUrl, profile, l1, l2, research: null });
+    if (!fatal) startResearch(id, profile, s);
+
+    const me = await sender();
+    const existing = await store.getContact(id);
+    return {
+      profile,
+      hooks: buildHooks(profile, me),
+      diagnostics: diagnosticsFor(profile),
+      contact: contactView(existing, me.followUpDays),
+      l1, l2
+    };
+  },
+
+  /** L2: wait for (or restart) the web research for this profile, then rebuild the hooks. */
+  async [ACTIONS.DEEP_ENRICH]({ profileUrl }) {
+    const id = contactIdFromUrl(canonicalProfileUrl(text(profileUrl, 300)));
+    const cached = id ? await store.getDeep(id) : null;
+    if (!cached?.profile) throw new UserError('Run “Read + research” first.', 'no_deep');
+    let result;
+    if (deepRuns.has(id)) result = await deepRuns.get(id);
+    else if (cached.l2 && !['running', 'failed'].includes(cached.l2.status)) result = { l2: cached.l2, research: cached.research };
+    else result = await startResearch(id, cached.profile, await openaiSettings()); // interrupted or retrying a failure
+
+    const me = await sender();
+    return {
+      l2: result.l2,
+      research: result.research,
+      hooks: buildHooks(cached.profile, me, researchHooks(result.research))
+    };
+  },
+
+  /** Restore the Deep Mode panel when the popup reopens. */
+  async [ACTIONS.DEEP_STATUS]({ url }) {
+    const id = contactIdFromUrl(canonicalProfileUrl(text(url, 300)));
+    const cached = id ? await store.getDeep(id) : null;
+    if (!cached) return { deep: null };
+    let l2 = cached.l2 || null;
+    // The background restarted mid-run: report it instead of spinning forever.
+    if (l2?.status === 'running' && !deepRuns.has(id)) l2 = { status: 'failed', note: 'The research was interrupted. Click “Read + research” to run it again.' };
+    return { deep: { l1: cached.l1 || null, l2, research: cached.research || null } };
+  },
+
+  async [ACTIONS.TEST_OPENAI_KEY]({ apiKey, model }) {
+    const key = text(apiKey, 300).trim() || (await store.getSettings()).openaiKey;
+    if (!key) return { valid: false, reason: 'Enter a key first.' };
+    if (/^sk-ant-/.test(key)) return { valid: false, reason: 'That is an Anthropic key. OpenAI keys start with "sk-" (often "sk-proj-").' };
+    if (!/^sk-[\w-]{16,}$/.test(key)) return { valid: false, reason: 'OpenAI keys start with "sk-" (often "sk-proj-").' };
+    const m = store.validModel(model);
+    try {
+      await openai.respond(key, { model: m, input: 'Reply with the single word: OK', maxOutputTokens: 300, timeoutMs: OPENAI.TEST_TIMEOUT_MS });
+    } catch (err) {
+      // The key and model were accepted even if the tiny test answer was cut short.
+      if (!(err instanceof ApiError) || !['incomplete', 'empty', 'refusal'].includes(err.code)) return { valid: false, reason: safeMessage(err) };
+    }
+    const settings = await store.saveSettings({ openaiKey: key, openaiModel: m });
+    return { valid: true, settings: store.publicSettings(settings) };
   },
 
   async [ACTIONS.GENERATE](p) {
@@ -240,7 +360,9 @@ const handlers = {
     const p = { ...patch };
     if (p.clearKey) p.apiKey = '';
     else if (typeof p.apiKey !== 'string' || !p.apiKey.trim()) delete p.apiKey; // keep the stored key
-    delete p.clearKey;
+    if (p.clearOpenAIKey) p.openaiKey = '';
+    else if (typeof p.openaiKey !== 'string' || !p.openaiKey.trim()) delete p.openaiKey;
+    for (const k of ['clearKey', 'clearOpenAIKey', 'resumeFileName', 'resumeBytes', 'resumeSavedAt']) delete p[k]; // resume fields follow the stored PDF
     const s = await store.saveSettings(p);
     await afterContactChange(); // follow-up days may have changed
     return { settings: store.publicSettings(s) };
@@ -273,19 +395,38 @@ const handlers = {
     }
   },
 
+  /** Keep the PDF on this device; with an Anthropic key, also fill in "Your background" from it. */
   async [ACTIONS.PARSE_RESUME]({ base64, fileName }) {
     const b64 = String(base64 || '');
     if (!b64 || b64.length > Math.ceil(LIMITS.MAX_RESUME_BYTES * 4 / 3) + 16) throw new UserError('That file is over 4 MB.');
+    if (!b64.startsWith('JVBER')) throw new UserError("That file isn't a valid PDF.", 'not_pdf'); // "%PDF" in base64
+    const name = text(fileName, 120) || 'resume.pdf';
+    const bytes = Math.floor(b64.length * 3 / 4) - (b64.endsWith('==') ? 2 : b64.endsWith('=') ? 1 : 0);
+    const saved = await store.saveResume({ base64: b64, fileName: name, bytes });
+    const patch = { resumeFileName: saved.fileName, resumeBytes: bytes, resumeSavedAt: saved.savedAt };
+
     const s = await store.getSettings();
-    if (!s.apiKey) throw new UserError('Add and test your API key first to read a resume — or type your background instead.');
-    const facts = await aiResumeFacts(client, s.apiKey, b64);
-    const merged = uniq([...splitList(s.background), ...facts.companies, ...facts.schools, ...facts.skills, facts.location].filter(Boolean));
-    const settings = await store.saveSettings({
-      background: merged.join(', '),
-      bio: s.bio || facts.summary,
-      resumeFileName: text(fileName, 120)
-    });
-    return { facts, settings: store.publicSettings(settings) };
+    let facts = null;
+    let parseError = '';
+    if (s.apiKey) {
+      try {
+        facts = await aiResumeFacts(client, s.apiKey, b64);
+        patch.background = uniq([...splitList(s.background), ...facts.companies, ...facts.schools, ...facts.skills, facts.location].filter(Boolean)).join(', ');
+        patch.bio = s.bio || facts.summary;
+      } catch (err) {
+        parseError = safeMessage(err); // the PDF is saved either way
+      }
+    }
+    const settings = await store.saveSettings(patch);
+    return { stored: true, facts, parseError, settings: store.publicSettings(settings) };
+  },
+
+  async [ACTIONS.GET_RESUME]() { return { resume: await store.getResume() }; },
+
+  async [ACTIONS.DELETE_RESUME]() {
+    await store.deleteResume();
+    const settings = await store.saveSettings({ resumeFileName: '', resumeBytes: 0, resumeSavedAt: 0 });
+    return { settings: store.publicSettings(settings) };
   },
 
   async [ACTIONS.SAVE_TEMPLATE]({ name, text: draft, purpose, ctx = {} }) {

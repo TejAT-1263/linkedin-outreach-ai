@@ -2,20 +2,21 @@
 // v3.1 (original): userApiKey, userName, userBio, resumeBase64, resumeFileName, recentContacts[]
 // v3.2:            + userBackground, prefs, session, recentContacts[].status
 // v3.3 (schema 2): settings{}, prefs{}, contacts{id→contact}, templates[], schemaVersion
-import { SCHEMA_VERSION, STATUS, LIMITS, DEFAULT_FORMAT } from '../shared/constants.js';
+import { SCHEMA_VERSION, STATUS, LIMITS, DEFAULT_FORMAT, OPENAI } from '../shared/constants.js';
 import { contactIdFromUrl, canonicalProfileUrl } from '../shared/text.js';
 
 export const LEGACY_KEYS = ['userApiKey', 'userName', 'userBio', 'userBackground', 'resumeBase64', 'resumeFileName', 'recentContacts', 'session'];
 
 export function defaultSettings() {
   return {
-    name: '', bio: '', background: '', apiKey: '', resumeFileName: '',
+    name: '', bio: '', background: '', apiKey: '', resumeFileName: '', resumeBytes: 0, resumeSavedAt: 0,
+    openaiKey: '', openaiModel: OPENAI.DEFAULT_MODEL,
     followUpDays: LIMITS.DEFAULT_FOLLOWUP_DAYS, notifications: true, theme: 'system'
   };
 }
 
 export function defaultPrefs() {
-  return { messageType: 'Networking', tone: 'Neutral', format: DEFAULT_FORMAT };
+  return { messageType: 'Networking', tone: 'Neutral', format: DEFAULT_FORMAT, mode: 'quick' };
 }
 
 /**
@@ -32,6 +33,16 @@ export function migrate(data = {}) {
   if (data.userBackground) settings.background = String(data.userBackground);
   if (data.userApiKey) settings.apiKey = String(data.userApiKey);
   if (data.resumeFileName) settings.resumeFileName = String(data.resumeFileName);
+
+  // The original kept the resume PDF; keep it (moved under one key).
+  const resume = typeof data.resumeBase64 === 'string' && data.resumeBase64
+    ? { base64: data.resumeBase64, fileName: String(data.resumeFileName || 'resume.pdf'), bytes: Math.floor(data.resumeBase64.length * 3 / 4), savedAt: Date.now() }
+    : null;
+  if (resume) {
+    settings.resumeFileName = resume.fileName;
+    settings.resumeBytes = resume.bytes;
+    settings.resumeSavedAt = resume.savedAt;
+  }
 
   const prefs = { ...defaultPrefs(), ...(data.prefs || {}) };
 
@@ -69,9 +80,9 @@ export function migrate(data = {}) {
       settings,
       prefs,
       contacts,
-      templates: Array.isArray(data.templates) ? data.templates : []
+      templates: Array.isArray(data.templates) ? data.templates : [],
+      ...(resume ? { resume } : {})
     },
-    // resumeBase64 is deliberately dropped: we no longer keep the PDF.
     remove: LEGACY_KEYS.filter(k => k in data)
   };
 }

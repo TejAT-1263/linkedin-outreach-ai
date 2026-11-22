@@ -32,18 +32,20 @@
 - **One writer to storage.** Only `background/store.js` touches `chrome.storage`. The popup never writes storage directly; it asks the router.
 - **Pure core, thin edges.** Hooks, both writers, templates, tracker maths and migrations are pure functions with no `chrome.*`. They're unit-tested in Node. Chrome APIs sit in `store`, `linkedin`, `followups` and `index`.
 - **One contract.** Every action name is in `shared/constants.js#ACTIONS`. Unknown actions and untrusted senders are rejected.
-- **Selectors in one place.** LinkedIn markup changes are a one-block edit in `content_script.js#SELECTORS`. The read check tells you when that edit is needed.
+- **Selectors in one place.** LinkedIn markup changes are a one-block edit in `content_script.js#SELECTORS`. The read check tells you when that edit is needed. Jobs and schools are split by their own containers in the page (structure, not class names), so they keep working when LinkedIn renames classes; flat markup falls back to reading 3 lines per entry.
 
 ## Data model (`chrome.storage.local`, schema v2)
 
 | Key | Shape | Notes |
 |---|---|---|
 | `schemaVersion` | `2` | `migrate.js` upgrades v3.1 / v3.2 data on install/update; idempotent |
-| `settings` | `{name, bio, background, apiKey, resumeFileName, followUpDays, notifications, theme}` | `apiKey` is never sent back to the UI (only `hasKey` + a masked hint) |
-| `prefs` | `{messageType, tone, format}` | last-used choices |
+| `settings` | `{name, bio, background, apiKey, openaiKey, openaiModel, resumeFileName, resumeBytes, resumeSavedAt, followUpDays, notifications, theme}` | API keys are never sent back to the UI (only `hasKey` / `hasOpenAIKey` + masked hints) |
+| `prefs` | `{messageType, tone, format, mode}` | last-used choices; `mode` is `quick` or `deep` |
+| `resume` | `{base64, fileName, bytes, savedAt}` | the uploaded PDF, kept on this device (needs `unlimitedStorage`) |
 | `contacts` | `{ [id: "in:<slug>"]: Contact }` | keyed by profile slug → O(1) upsert, no duplicates |
 | `templates` | `Template[]` | ≤ 50 |
 | *(session)* `draft` | current profile/hooks/draft | `chrome.storage.session`: in memory, cleared when the browser closes, 6 h TTL |
+| *(session)* `deep` | `{ [id]: {profile, l1, l2, research} }` | Deep Mode results per profile (20 most recent, 6 h TTL), so a reopened popup picks up research that finished while it was closed |
 
 `Contact`: `id, profileUrl, name, headline, company, purpose, format, message, hooks[≤2], status (drafted|copied|inserted|sent|replied|closed), followUps, createdAt, updatedAt, insertedAt, sentAt, lastTouchAt, repliedAt, notifiedAt, history[≤20]`.
 
@@ -57,12 +59,14 @@
 | Over-long AI output | One "shorten" pass, then a sentence-boundary cut. Never exceeds the format's limit. |
 | Draft lost when the popup closes | Session saved on every change (debounced) and restored per profile URL. |
 | LinkedIn markup drift | Anchor-id lookup first, heading text as fallback. Read check reports `found/8` and flags a likely layout change. Insert verifies the text actually landed and falls back to copy if not. |
-| Old data after an update | Versioned migrations. The stored resume PDF from v3.1 is deleted. |
+| Old data after an update | Versioned migrations. The stored resume PDF from v3.1 is kept (moved under `resume`). |
+| Deep Mode facts | L1 values must appear in the page text; L2 items must cite a URL the web search returned. Nothing unbacked reaches a draft. |
+| Long OpenAI calls | Up to 60 s (L1) / 120 s (L2). The service worker is kept alive while waiting; research continues if the popup closes; one search per profile at a time. |
 | Unbounded growth | Contacts capped at 1,000 (prunes oldest drafts first, keeps people awaiting a reply). Tracker lists are paged (30 per page). |
 
 ## Security & privacy
 
-- **No backend; no data leaves the browser** unless the user adds their own Anthropic key. Then only the profile text needed for the draft (and the resume, once) is sent to `api.anthropic.com`.
+- **No backend; no data leaves the browser** unless the user adds their own keys. With an Anthropic key, the profile text needed for the draft (and the resume, when uploaded) goes to `api.anthropic.com`. With an OpenAI key and Deep Mode, the profile's own page text and the person's name, role and company go to `api.openai.com` (with `store: false`).
 - **Strict CSP** on extension pages (`script-src 'self'; object-src 'none'`). **No `innerHTML` with data** in the popup: every node is built with `textContent` (`dom.js#h`).
 - **Router only accepts our own extension pages** (`sender.id` + `chrome-extension://<id>/` URL). The content script only accepts messages from the extension.
 - **All inputs are validated and length-capped at the boundary** (`normalizeProfile`, `sanitizeHooks`, `sanitizeSettings`, router guards).

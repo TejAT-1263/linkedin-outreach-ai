@@ -114,21 +114,43 @@ test('testKey: empty, wrong prefix, valid (saved), rejected', async () => {
   assert.equal((await store.getSettings()).apiKey, 'sk-ant-good', 'a failed test never overwrites the working key');
 });
 
-test('parseResume: needs key; merges facts; keeps an existing bio; bad output', async () => {
-  assert.match((await call('parseResume', { base64: 'JVBER' })).error, /API key first/);
+test('parseResume: always keeps the PDF; with a key also merges facts; keeps an existing bio; bad output', async () => {
   assert.match((await call('parseResume', {})).error, /over 4 MB/, 'empty upload rejected');
+  assert.match((await call('parseResume', { base64: 'aGVsbG8=' })).error, /valid PDF/, 'non-PDF bytes rejected');
+  // No Anthropic key: the PDF is still saved, nothing is sent anywhere.
+  const noKey = await call('parseResume', { base64: 'JVBERi0xLjQK', fileName: 'cv.pdf' });
+  assert.equal(noKey.success, true);
+  assert.equal(noKey.data.stored, true);
+  assert.equal(noKey.data.facts, null);
+  assert.equal(net.requests.length, 0);
+  assert.equal(noKey.data.settings.resumeFileName, 'cv.pdf');
+  assert.equal(noKey.data.settings.resumeBytes, 9);
+  assert.equal((await call('getResume')).data.resume.base64, 'JVBERi0xLjQK');
+
   await call('saveSettings', { apiKey: 'sk-ant-x', background: 'React, flipkart', bio: '' });
   net.queue.push({ status: 200, text: '{"summary":"I build","companies":["Flipkart","Swiggy"],"schools":["IIT Delhi"],"skills":["React","Go"],"location":"Pune, India"}' });
-  const r = await call('parseResume', { base64: 'JVBER', fileName: 'cv.pdf' });
+  const r = await call('parseResume', { base64: 'JVBER=', fileName: 'new.pdf' });
   assert.equal(r.data.settings.background, 'React, flipkart, Swiggy, IIT Delhi, Go, Pune');
   assert.equal(r.data.settings.bio, 'I build');
-  assert.equal(r.data.settings.resumeFileName, 'cv.pdf');
+  assert.equal(r.data.settings.resumeFileName, 'new.pdf', 'a new upload replaces the old one');
+  assert.equal((await call('getResume')).data.resume.fileName, 'new.pdf');
   assert.equal(net.requests[0].body.messages[0].content[0].type, 'document');
   await call('saveSettings', { bio: 'Mine' });
   net.queue.push({ status: 200, text: '{"summary":"Other"}' });
-  assert.equal((await call('parseResume', { base64: 'JVBER' })).data.settings.bio, 'Mine');
+  assert.equal((await call('parseResume', { base64: 'JVBER==' })).data.settings.bio, 'Mine');
+  // Unreadable AI output: the PDF is still saved and the reason is reported.
   net.queue.push({ status: 200, text: 'sorry, cannot' });
-  assert.match((await call('parseResume', { base64: 'JVBER' })).error, /Couldn't read the resume/);
+  const bad = await call('parseResume', { base64: 'JVBERbad', fileName: 'x.pdf' });
+  assert.equal(bad.success, true);
+  assert.match(bad.data.parseError, /Couldn't read the resume/);
+  assert.equal((await call('getResume')).data.resume.base64, 'JVBERbad');
+
+  // Settings saves can't fake or wipe the resume fields; delete really removes the PDF.
+  assert.equal((await call('saveSettings', { resumeFileName: 'fake.pdf', resumeBytes: 1 })).data.settings.resumeFileName, 'x.pdf');
+  const del = await call('deleteResume');
+  assert.equal(del.data.settings.resumeFileName, '');
+  assert.equal(del.data.settings.resumeBytes, 0);
+  assert.equal((await call('getResume')).data.resume, null);
 });
 
 test('insert: status transitions, never downgrades, ignores failures', async () => {
@@ -186,7 +208,9 @@ test('session + prefs round-trip with validation', async () => {
   assert.equal((await call('getSession', { url: 'other' })).data.session, null);
   await call('saveSession', {});
   const p = (await call('savePrefs', { messageType: 'Hack', tone: 'Casual', format: 'xx' })).data.prefs;
-  assert.deepEqual(p, { messageType: 'Networking', tone: 'Casual', format: 'note' });
+  assert.deepEqual(p, { messageType: 'Networking', tone: 'Casual', format: 'note', mode: 'quick' });
+  assert.equal((await call('savePrefs', { mode: 'deep' })).data.prefs.mode, 'deep');
+  assert.equal((await call('savePrefs', { mode: 'warp' })).data.prefs.mode, 'deep', 'unknown modes are ignored');
 });
 
 test('template edge cases: empty name, short text, delete', async () => {

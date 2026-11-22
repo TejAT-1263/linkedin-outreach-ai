@@ -190,7 +190,7 @@ await step('settings: Enter tests key; network failure is reported; theme click 
   await pop.click('.seg[data-theme="system"]'); await pop.waitForTimeout(250);
 });
 
-await step('resume dropzone: keyboard opens picker, drag styles, drop works, >4 MB and no-key rejected', async () => {
+await step('resume dropzone: keyboard opens picker, drag styles, drop works, >4 MB rejected, no key → saved only', async () => {
   await pop.bringToFront();
   await pop.click('#tabbtn-settings');
   await pop.focus('#dropzone');
@@ -211,7 +211,7 @@ await step('resume dropzone: keyboard opens picker, drag styles, drop works, >4 
   await pop.waitForFunction(() => /DropCo/.test(document.querySelector('#s-background').value), null, { timeout: 10000 });
   await pop.click('#remove-key-btn'); await pop.waitForTimeout(250);
   await pop.setInputFiles('#resume-input', { name: 'cv.pdf', mimeType: 'application/pdf', buffer: Buffer.from('%PDF') });
-  await pop.waitForFunction(() => /API key below first/.test(document.querySelector('#resume-status').textContent));
+  await pop.waitForFunction(() => /Saved on this device/.test(document.querySelector('#resume-status').textContent));
 });
 
 await step('navigation links: header badge, setup tip, "View in Tracker"', async () => {

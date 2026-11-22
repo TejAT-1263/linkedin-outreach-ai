@@ -215,6 +215,90 @@ test('2026 layout: h2 name, inner scroll container, lazy sections, "…more" but
 });
 
 // ─── Messaging contract ───────────────────────────────────────────────────────
+// ─── Per-entry containers (measured on live LinkedIn, Nov 22 2026) ─────────────
+// Each job/school is wrapped in its own block; entries have 2–4 lines, so a fixed 3-line
+// stride misreads them. A location without a comma ("Greater Seattle Area") and a school
+// without dates used to shift every following row.
+const card = (lines) => `<div componentkey="x"><div><div><a><div>${lines.map(t => `<p>${t}</p>`).join('')}</div></a></div></div></div>`;
+const ENTRIES = `
+<section><h2>Jordan Lee</h2><p>CEO at Contoso</p><p>Seattle, Washington, United States</p></section>
+<section><h2>Experience</h2><div><div>
+  ${card(['Chairman and CEO', 'Contoso', 'Feb 2014 - Present · 12 yrs 10 mos', 'Greater Seattle Area'])}
+  ${card(['Member Board Of Trustees', 'University of Chicago', '2018 – Present'])}
+  ${card(['Board Member', 'Fabrikam', '2017 – 2024'])}
+  ${card(['Northwind', 'Full-time · 9 yrs 2 mos', 'Pune, Maharashtra, India', 'Engineering Manager', 'Jan 2019 - Feb 2023 · 4 yrs 2 mos', 'Senior Engineer', 'Jan 2014 - Dec 2018 · 5 yrs'])}
+  <p>Show all 6 experiences</p></div></div></section>
+<section><h2>Education</h2><div><div>
+  ${card(['Booth School of Business', '1994 – 1996'])}
+  ${card(['Manipal Institute of Technology', 'Bachelor’s Degree, Electrical Engineering'])}
+</div></div></section>`;
+
+test('per-entry containers: uneven entries, comma-less locations, schools without dates, several roles at one company', async () => {
+  const { page, scrape } = await load(ENTRIES, { title: 'Jordan Lee | LinkedIn' });
+  const d = await scrape();
+  assert.deepEqual(d.experienceEntries, [
+    { title: 'Chairman and CEO', company: 'Contoso', duration: 'Feb 2014 - Present · 12 yrs 10 mos' },
+    { title: 'Member Board Of Trustees', company: 'University of Chicago', duration: '2018 – Present' },
+    { title: 'Board Member', company: 'Fabrikam', duration: '2017 – 2024' },
+    { title: 'Engineering Manager', company: 'Northwind', duration: 'Jan 2019 - Feb 2023 · 4 yrs 2 mos' },
+    { title: 'Senior Engineer', company: 'Northwind', duration: 'Jan 2014 - Dec 2018 · 5 yrs' }
+  ]);
+  assert.equal(d.currentCompany, 'Contoso');
+  assert.deepEqual(d.pastCompanies, ['University of Chicago', 'Fabrikam', 'Northwind']);
+  assert.deepEqual(d.educationEntries, [
+    { school: 'Booth School of Business', detail: '' },
+    { school: 'Manipal Institute of Technology', detail: 'Bachelor’s Degree, Electrical Engineering' }
+  ]);
+  await page.close();
+});
+
+test('single-name locations are read from the line before "Contact info"; the headline byline is not a post', async () => {
+  const html = `<section><h2>Reid Doe</h2><p>He/Him</p><p>· 3rd</p><p>Co-Founder, Acme. Author of Big Ideas.</p><p>United States</p><span>·</span><a>Contact info</a><p>2,803,559 followers</p></section>
+    <section><h2>Activity</h2><p><span>Co-Founder, Acme. Author of Big Ideas.</span></p><p><span>We experimented with a four-day week for a quarter; here is what changed.</span></p></section>`;
+  const { page, scrape } = await load(html, { title: 'Reid Doe | LinkedIn' });
+  const d = await scrape();
+  assert.equal(d.location, 'United States');
+  assert.deepEqual(d.recentPosts, ['We experimented with a four-day week for a quarter; here is what changed.']);
+  await page.close();
+  // Not a place: a title-like line before Contact info is not taken as a location.
+  const { page: p2, scrape: s2 } = await load('<section><h2>Ann Bo</h2><p>Designer</p><p>Head of Design</p><a>Contact info</a></section>', { title: 'Ann Bo | LinkedIn' });
+  assert.equal((await s2()).location, '');
+  await p2.close();
+});
+
+test('Deep Mode page text: the profile’s own sections only (no sidebar), bounded, with a fallback', async () => {
+  const html = `<section><h2>Jordan Lee</h2><p>CEO at Contoso</p><p>Seattle, Washington, United States</p></section>
+    <section><h2>About</h2><p>I like building things that last.</p></section>
+    <section><h2>Experience</h2><p>CEO</p><p>Contoso</p></section>
+    <aside><section><h2>People you may know</h2><p>Someone Else — Recruiter at Evil Corp</p></section></aside>`;
+  const { page, scrape } = await load(html, { title: 'Jordan Lee | LinkedIn' });
+  const d = await scrape();
+  assert.match(d.rawText, /Jordan Lee/);
+  assert.match(d.rawText, /I like building things that last\./);
+  assert.match(d.rawText, /CEO\nContoso/);
+  assert.doesNotMatch(d.rawText, /Evil Corp/, 'sidebar profiles are not sent to the parser');
+  await page.close();
+
+  // Nothing recognisable: fall back to the main column, capped at 15,000 characters.
+  const big = `<div><p>Mystery Person</p><p>${'word '.repeat(5000)}</p></div>`;
+  const { page: p2, scrape: s2 } = await load(big, { title: 'Mystery Person | LinkedIn' });
+  const d2 = await s2();
+  assert.match(d2.rawText, /^Mystery Person/);
+  assert.equal(d2.rawText.length, 15000);
+  await p2.close();
+});
+
+test('a single wrapped entry is read as one entry, not split into its parts', async () => {
+  const one = `<section><h2>Sam Roy</h2><p>Analyst at Acme</p></section>
+    <section><h2>Experience</h2><div componentkey="a"><div><p>Analyst</p><p>Acme · Full-time</p></div><div><p>Mar 2024 - Present · 2 yrs 8 mos</p></div></div></section>
+    <section><h2>Education</h2><div componentkey="b"><div><p>Nirma University</p></div><div><p>B.Tech, IT</p><p>2019 – 2023</p></div></div></section>`;
+  const { page, scrape } = await load(one, { title: 'Sam Roy | LinkedIn' });
+  const d = await scrape();
+  assert.deepEqual(d.experienceEntries, [{ title: 'Analyst', company: 'Acme', duration: 'Mar 2024 - Present · 2 yrs 8 mos' }]);
+  assert.deepEqual(d.educationEntries, [{ school: 'Nirma University', detail: 'B.Tech, IT' }]);
+  await page.close();
+});
+
 test('ping, unknown actions, foreign senders, double injection', async () => {
   const { page, send } = await load('<p>x</p>');
   assert.deepEqual(await send({ action: 'ping' }), { ok: true });

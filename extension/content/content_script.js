@@ -164,7 +164,7 @@
       const lines = [...new Set(leafTexts(topCard, SELECTORS.topCardLines))]
         .filter(t => t !== name && !/connections?|followers?|contact info|^he\/him|^she\/her|^they\/them/i.test(t));
       headline = lines.find(t => t.length > 5 && (t.includes('|') || t.includes('@') || TITLE_WORDS_RE.test(t))) || lines.find(t => t.length > 5) || '';
-      location = lines.find(t => t !== headline && looksLikeLocation(t)) || '';
+      location = lines.find(t => t !== headline && looksLikeLocation(t)) || locationBeforeContactInfo(topCard, name, headline);
     }
 
     const sections = {
@@ -181,20 +181,26 @@
       ? clean(topSkillsLabel.nextElementSibling.innerText || topSkillsLabel.nextElementSibling.textContent).split(/\s*[•·]\s*/).filter(t => t && t.length < 60)
       : [];
 
-    // Experience: title, company · type, dates, [location]
+    // Experience: title, company · type, dates, [location]. Entries are read one container
+    // at a time when LinkedIn wraps them (it does); flat markup falls back to a 3-line stride.
     const experienceEntries = [];
-    const expLines = [...dedupeAdjacent(leafTexts(sections.experience, SELECTORS.leafText))].filter(t => t !== 'Experience');
-    for (let i = 0; i < expLines.length && experienceEntries.length < 6;) {
-      const title = expLines[i];
-      if (DATE_RE.test(title) || looksLikeLocation(title) || UI_NOISE_RE.test(title)) { i++; continue; }
-      const company = expLines[i + 1] || '';
-      const dur = expLines[i + 2] || '';
-      experienceEntries.push({
-        title,
-        company: company.split('·')[0].trim(),
-        duration: DURATION_RE.test(dur) ? dur : ''
-      });
-      i += looksLikeLocation(expLines[i + 3]) ? 4 : 3;
+    const expGroups = entryGroups(sections.experience, 'Experience');
+    if (expGroups) {
+      for (const g of expGroups) experienceEntries.push(...parseExperienceGroup(g));
+    } else {
+      const expLines = flatLines(sections.experience, 'Experience');
+      for (let i = 0; i < expLines.length && experienceEntries.length < 6;) {
+        const title = expLines[i];
+        if (DATE_RE.test(title) || looksLikeLocation(title) || UI_NOISE_RE.test(title)) { i++; continue; }
+        const company = expLines[i + 1] || '';
+        const dur = expLines[i + 2] || '';
+        experienceEntries.push({
+          title,
+          company: company.split('·')[0].trim(),
+          duration: DURATION_RE.test(dur) ? dur : ''
+        });
+        i += looksLikeLocation(expLines[i + 3]) ? 4 : 3;
+      }
     }
 
     const current = experienceEntries[0] || null;
@@ -206,14 +212,22 @@
       !/^skills\b/i.test(t) && t.length < 60 && !/\d/.test(t) && !UI_NOISE_RE.test(t))])];
 
     const educationEntries = [];
-    const eduLines = [...dedupeAdjacent(leafTexts(sections.education, SELECTORS.leafText))].filter(t => t !== 'Education');
-    for (let i = 0; i < eduLines.length; i += 3) {
-      if (eduLines[i] && !DATE_RE.test(eduLines[i])) educationEntries.push({ school: eduLines[i], detail: eduLines[i + 1] || '' });
+    const eduGroups = entryGroups(sections.education, 'Education');
+    if (eduGroups) {
+      for (const [school, detail] of eduGroups) {
+        if (school && !DATE_RE.test(school)) educationEntries.push({ school, detail: detail && !DATE_RE.test(detail) ? detail : '' });
+      }
+    } else {
+      const eduLines = flatLines(sections.education, 'Education');
+      for (let i = 0; i < eduLines.length; i += 3) {
+        if (eduLines[i] && !DATE_RE.test(eduLines[i])) educationEntries.push({ school: eduLines[i], detail: eduLines[i + 1] || '' });
+      }
     }
 
     const postBlocks = textBlocks(sections.activity, 40);
     const recentPosts = [...new Set((postBlocks.length ? postBlocks : leafTexts(sections.activity))
-      .filter(t => t.length > 40 && t.length < 3000 && !UI_NOISE_RE.test(t) && !/\bfollowers?\b/i.test(t)))];
+      // The author byline on your own posts repeats the headline: that isn't a post.
+      .filter(t => t.length > 40 && t.length < 3000 && t !== headline && !UI_NOISE_RE.test(t) && !/\bfollowers?\b/i.test(t)))];
 
     // Read check: which parts did we actually find?
     const found = {
@@ -226,6 +240,7 @@
     const layoutSuspect = !found.name || (!found.headline && !found.experience);
 
     return {
+      rawText: profileText(topCard, sections),
       name, headline, currentTitle, currentCompany, location, about,
       recentPosts: recentPosts.slice(0, 3),
       experienceEntries: experienceEntries.slice(0, 5),
@@ -235,6 +250,100 @@
       profileUrl: location_href(),
       diagnostics: { found, foundCount, total: Object.keys(found).length, layoutSuspect }
     };
+  }
+
+  /**
+   * Single-name places ("United States", "Singapore", "Greater Seattle Area") have no comma,
+   * so looksLikeLocation can't recognise them. LinkedIn always prints the location directly
+   * before the "Contact info" link, so take that line when it is plausibly a place.
+   */
+  function locationBeforeContactInfo(topCard, name, headline) {
+    const leaves = Array.from(topCard.querySelectorAll('p, span, a, div'))
+      .filter(el => el.children.length === 0)
+      .map(el => clean(el.innerText || el.textContent))
+      .filter(t => t && !/^[·•\s]+$/.test(t));
+    const at = leaves.findIndex(t => /^contact info$/i.test(t));
+    const prev = at > 0 ? leaves[at - 1].replace(/\s*·\s*$/, '') : '';
+    const plausible = prev && prev !== name && prev !== headline && prev.length <= 60 &&
+      /^[\p{L}][\p{L} .,'()-]*$/u.test(prev) && !TITLE_WORDS_RE.test(prev);
+    return plausible ? prev : '';
+  }
+
+  /**
+   * The profile's own visible text (top card + its sections, no sidebar or ads) for Deep Mode's
+   * parser. Falls back to the whole main column when the sections can't be found. Bounded.
+   */
+  const RAW_TEXT_MAX = 15000;
+  function profileText(topCard, sections) {
+    const els = [topCard, ...Object.values(sections)].filter(Boolean);
+    const roots = els.filter((el, i) => !els.some((o, j) => j !== i && o !== el && o.contains(el)));
+    const textOf = (el) => String(el.innerText || el.textContent || '').replace(/[ \t]+/g, ' ').replace(/\n\s*\n+/g, '\n').trim();
+    let out = [...new Set(roots)].map(textOf).filter(Boolean).join('\n\n');
+    if (out.length < 40) out = textOf(document.querySelector('main') || document.body); // nothing recognisable
+    return out.slice(0, RAW_TEXT_MAX);
+  }
+
+  function flatLines(root, heading) {
+    return [...dedupeAdjacent(leafTexts(root, SELECTORS.leafText))].filter(t => t !== heading);
+  }
+
+  /**
+   * Split a section into one line-list per entry, using the DOM: walk down from the section
+   * until the text lines first fall into different containers. Those containers are the
+   * entries (LinkedIn wraps each job/school in its own block). Returns null when the markup
+   * has no per-entry containers (every line in its own element), so callers use the stride.
+   */
+  function entryGroups(root, heading) {
+    if (!root) return null;
+    const leaves = Array.from(root.querySelectorAll(SELECTORS.leafText))
+      .filter(el => el.children.length === 0)
+      .map(el => ({ el, text: clean(el.innerText || el.textContent) }))
+      .filter(l => l.text.length > 2 && !/^[·•\s]+$/.test(l.text) && l.text !== heading && !UI_NOISE_RE.test(l.text));
+    if (!leaves.length) return null;
+    const chains = leaves.map(({ el }) => {
+      const c = [];
+      for (let a = el; a && a !== root; a = a.parentElement) c.unshift(a);
+      return c;
+    });
+    const maxDepth = Math.max(...chains.map(c => c.length));
+    for (let d = 0; d < maxDepth; d++) {
+      const groups = new Map();
+      chains.forEach((c, i) => {
+        const key = c[d] || leaves[i].el;
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(leaves[i].text);
+      });
+      if (groups.size < 2) continue;
+      const lists = [...groups.values()].map(g => [...dedupeAdjacent(g)]);
+      const multi = lists.filter(g => g.length >= 2).length;
+      if (multi >= 2) return lists;
+      // One wrapped entry splitting into its own parts (title block, dates…): read it as one.
+      if (multi === 1) return [[...dedupeAdjacent(leaves.map(l => l.text))]];
+      return null; // every line in its own element: flat markup
+    }
+    return null;
+  }
+
+  // "Full-time · 9 yrs", "4 yrs 2 mos": the company-level line above several roles at one company.
+  const TENURE_RE = /^(?:[\p{L}-]+(?:\s[\p{L}-]+)?\s*·\s*)?\d+\s*(?:yrs?|mos?)(?:\s+\d+\s*mos?)?$/iu;
+
+  function parseExperienceGroup(lines) {
+    if (!lines.length || DATE_RE.test(lines[0]) || looksLikeLocation(lines[0])) return [];
+    if (lines.length > 2 && TENURE_RE.test(lines[1] || '')) {
+      // One company, several roles: company, tenure, [location], then title + dates pairs.
+      const company = lines[0];
+      const roles = [];
+      for (let i = 2; i < lines.length; i++) {
+        const t = lines[i];
+        if (DATE_RE.test(t) || TENURE_RE.test(t) || looksLikeLocation(t) || t.length > 100) continue;
+        const dur = lines.slice(i + 1, i + 3).find(l => DATE_RE.test(l) && DURATION_RE.test(l)) || '';
+        roles.push({ title: t, company, duration: dur });
+        if (dur) i = lines.indexOf(dur, i + 1);
+      }
+      if (roles.length) return roles;
+    }
+    const dur = lines.slice(2, 4).find(l => DATE_RE.test(l) && DURATION_RE.test(l)) || '';
+    return [{ title: lines[0], company: (lines[1] || '').split('·')[0].trim(), duration: dur }];
   }
 
   // LinkedIn renders visible + screen-reader copies of the same text side by side.

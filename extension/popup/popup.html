@@ -83,6 +83,49 @@
       </div>
     </div>
 
+    <div class="field mode-field">
+      <span class="field-label" id="mode-label">Mode</span>
+      <div class="segmented" id="mode" role="radiogroup" aria-labelledby="mode-label">
+        <button type="button" class="seg" role="radio" data-mode="quick" title="Read the page and draft right away">⚡ Quick</button>
+        <button type="button" class="seg" role="radio" data-mode="deep" title="OpenAI parses the profile, OpenAI researches the web, then the writer drafts">🔍 Deep <small>3-layer AI</small></button>
+      </div>
+    </div>
+
+    <div class="pipeline hidden" id="deep-panel">
+      <div class="pipeline-head">3-layer AI pipeline <span class="muted" id="deep-model"></span></div>
+      <div class="alert alert-tip hidden" id="deep-needs-key" role="note">
+        Deep Mode runs on your own OpenAI key. <button class="link" type="button" data-goto="settings">Add it in Settings</button>.
+      </div>
+      <ol class="layers" aria-label="Deep Mode progress">
+        <li class="layer" id="layer-l1" data-state="ready">
+          <span class="layer-badge l1">L1</span>
+          <div class="layer-info"><div class="layer-title">OpenAI — Profile parser</div><div class="layer-desc" id="l1-desc">Turns the page into clean data, checked against the page</div></div>
+          <span class="layer-state" id="l1-state">Ready</span>
+        </li>
+        <li class="layer" id="layer-l2" data-state="ready">
+          <span class="layer-badge l2">L2</span>
+          <div class="layer-info"><div class="layer-title">OpenAI — Web research</div><div class="layer-desc" id="l2-desc">Company news and their public work, with sources</div></div>
+          <span class="layer-state" id="l2-state">Ready</span>
+        </li>
+        <li class="layer" id="layer-l3" data-state="ready">
+          <span class="layer-badge l3">L3</span>
+          <div class="layer-info"><div class="layer-title">Message writer</div><div class="layer-desc" id="l3-desc">Writes from everything found</div></div>
+          <span class="layer-state" id="l3-state">Ready</span>
+        </li>
+      </ol>
+      <div class="sources hidden" id="deep-sources">
+        <div class="sources-title">Found on the web</div>
+        <ul class="source-list" id="source-list"></ul>
+      </div>
+      <button id="enrich-btn" class="btn btn-primary btn-full" type="button">
+        <span id="enrich-label">Read + research (L1 + L2)</span>
+        <span class="spinner hidden" id="enrich-spinner" aria-hidden="true"></span>
+      </button>
+      <button id="deep-gen-btn" class="btn btn-secondary btn-full" type="button" disabled>
+        <span class="spinner dark hidden" id="deep-gen-spinner" aria-hidden="true"></span><span>Write message (L3)</span>
+      </button>
+    </div>
+
     <button id="read-btn" class="btn btn-primary btn-full" type="button">
       <span id="read-label">Read profile &amp; draft</span>
       <span class="spinner hidden" id="read-spinner" aria-hidden="true"></span>
@@ -176,10 +219,15 @@
           <textarea id="s-background" class="input" rows="2" maxlength="1000" placeholder="Companies, schools, skills, city — comma separated"></textarea>
           <span class="hint">Used to spot what you have in common with each person.</span></label>
         <div class="field">
-          <span class="field-label">Resume (PDF) <span class="muted">— fills in your background, needs an API key</span></span>
+          <span class="field-label">Resume (PDF) <span class="muted">— kept on this device; with an Anthropic key it also fills in your background</span></span>
           <div class="dropzone" id="dropzone" tabindex="0" role="button" aria-label="Upload resume PDF">
             <span id="dropzone-label">Click or drop a PDF</span>
             <input id="resume-input" type="file" accept="application/pdf,.pdf" hidden />
+          </div>
+          <div class="resume-saved hidden" id="resume-saved">
+            <span class="resume-file" id="resume-saved-name"></span>
+            <button class="link" type="button" id="resume-download-btn">Download</button>
+            <button class="link danger" type="button" id="resume-remove-btn">Remove</button>
           </div>
           <div class="note hidden" id="resume-status" role="status"></div>
         </div>
@@ -187,7 +235,7 @@
 
       <fieldset class="card">
         <legend>AI writing <span class="muted">(optional)</span></legend>
-        <p class="hint">Without a key, the built-in writer runs locally and nothing leaves your browser. With your own Anthropic key, drafts are written by Claude.</p>
+        <p class="hint">Without a key, the built-in writer runs locally and nothing leaves your browser. With your own Anthropic key, drafts are written by Anthropic's AI.</p>
         <div class="key-row">
           <input id="s-key" class="input mono" type="password" placeholder="sk-ant-…" autocomplete="off" spellcheck="false" aria-label="Anthropic API key" />
           <button class="btn btn-primary btn-sm" type="button" id="test-key-btn">Test &amp; save</button>
@@ -197,6 +245,24 @@
           <button class="link danger hidden" type="button" id="remove-key-btn">Remove key</button>
         </div>
         <div class="note hidden" id="key-status-note" role="status"></div>
+      </fieldset>
+
+      <fieldset class="card">
+        <legend>Deep Mode <span class="muted">(OpenAI, optional)</span></legend>
+        <p class="hint">Deep Mode's L1 parser and L2 web research use your own OpenAI key. The profile text and the person's name, role and company go to OpenAI only when you run Deep Mode.</p>
+        <div class="key-row">
+          <input id="s-openai-key" class="input mono" type="password" placeholder="sk-proj-…" autocomplete="off" spellcheck="false" aria-label="OpenAI API key" />
+          <button class="btn btn-primary btn-sm" type="button" id="test-openai-btn">Test &amp; save</button>
+        </div>
+        <label class="field"><span class="field-label">Model</span>
+          <input id="s-openai-model" class="input mono" type="text" list="openai-models" maxlength="64" spellcheck="false" autocomplete="off" />
+          <datalist id="openai-models"></datalist>
+          <span class="hint">Must support web search. Default: <span id="openai-default-model"></span>.</span></label>
+        <div class="key-meta">
+          <span class="muted" id="openai-key-hint"></span>
+          <button class="link danger hidden" type="button" id="remove-openai-btn">Remove key</button>
+        </div>
+        <div class="note hidden" id="openai-status-note" role="status"></div>
       </fieldset>
 
       <fieldset class="card">
@@ -228,7 +294,7 @@
 
       <fieldset class="card subtle">
         <legend>Your data</legend>
-        <p class="hint">Everything is stored on this device. Profile text and your resume are only sent to Anthropic when you add your own API key.</p>
+        <p class="hint">Everything is stored on this device, including your resume. Profile text and your resume go to Anthropic only with your Anthropic key; Deep Mode sends profile details to OpenAI only with your OpenAI key.</p>
         <div class="row gap">
           <button class="btn btn-secondary btn-sm" type="button" id="export-btn-2">Export tracker (CSV)</button>
           <button class="btn btn-danger btn-sm" type="button" id="reset-btn">Reset everything</button>

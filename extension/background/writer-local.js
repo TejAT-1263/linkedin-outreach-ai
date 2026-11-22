@@ -45,6 +45,15 @@ const OPENERS = {
     v => `Your experience with ${v} caught my eye.`
   ],
   education: [v => `Saw you studied at ${v}.`],
+  // Deep Mode web research. Values complete "I saw …" / "I enjoyed …".
+  news: [
+    v => `I saw ${v}.`,
+    v => `Caught ${v} recently.`
+  ],
+  work: [
+    v => `I enjoyed ${v}.`,
+    v => `Really enjoyed ${v}.`
+  ],
   headline: [v => `Your headline caught my eye: "${truncate(v, 60)}".`]
 };
 

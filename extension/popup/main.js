@@ -97,6 +97,6 @@ function renderKeyBadge() {
   const s = app.state.settings;
   const el = $('key-status');
   el.textContent = s.hasKey ? '✦ AI · your key' : '✎ Built-in writer';
-  el.title = s.hasKey ? 'Drafts are written by Claude with your API key. Click to manage.' : 'Drafts are written locally — nothing leaves your browser. Click to add an AI key.';
+  el.title = s.hasKey ? 'Drafts are written by AI with your Anthropic key. Click to manage.' : 'Drafts are written locally — nothing leaves your browser. Click to add an AI key.';
   el.className = `key-status ${s.hasKey ? 'ai' : 'local'}`;
 }
